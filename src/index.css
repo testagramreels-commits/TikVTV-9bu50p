@@ -1,0 +1,191 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Dark theme (default) ────────────────────────────────────────────────── */
+@layer base {
+  :root, .dark {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 10%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 348 99% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 177 90% 56%;
+    --secondary-foreground: 0 0% 0%;
+    --muted: 0 0% 15%;
+    --muted-foreground: 0 0% 63%;
+    --accent: 0 0% 15%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 348 99% 58%;
+    --radius: 0.75rem;
+    --sidebar-background: 0 0% 5%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 348 99% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 12%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 15%;
+    --sidebar-ring: 348 99% 58%;
+  }
+}
+
+/* ── Light theme ─────────────────────────────────────────────────────────── */
+@layer base {
+  .light {
+    --background: 0 0% 97%;
+    --foreground: 0 0% 8%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 8%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 8%;
+    --primary: 348 99% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 177 70% 42%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 92%;
+    --muted-foreground: 0 0% 45%;
+    --accent: 0 0% 92%;
+    --accent-foreground: 0 0% 8%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 85%;
+    --input: 0 0% 90%;
+    --ring: 348 99% 50%;
+    --sidebar-background: 0 0% 95%;
+    --sidebar-foreground: 0 0% 15%;
+    --sidebar-primary: 348 99% 50%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 88%;
+    --sidebar-accent-foreground: 0 0% 10%;
+    --sidebar-border: 0 0% 82%;
+    --sidebar-ring: 348 99% 50%;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html, body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overscroll-behavior: none;
+    padding-bottom: env(safe-area-inset-bottom);
+    /* Prevent white flash on load */
+    background-color: #000;
+  }
+  ::-webkit-scrollbar { display: none; }
+  scrollbar-width: none;
+}
+
+@layer utilities {
+  .scroll-snap-y      { scroll-snap-type: y mandatory; }
+  .scroll-snap-start  { scroll-snap-align: start; }
+  .scroll-snap-center { scroll-snap-align: center; }
+
+  .text-shadow    { text-shadow: 0 1px 3px rgba(0,0,0,.8), 0 2px 8px rgba(0,0,0,.5); }
+  .text-shadow-sm { text-shadow: 0 1px 2px rgba(0,0,0,.9); }
+
+  .gradient-overlay {
+    background: linear-gradient(to top,
+      rgba(0,0,0,.92) 0%, rgba(0,0,0,.5) 35%,
+      rgba(0,0,0,.1) 60%, transparent 100%);
+  }
+  .gradient-top {
+    background: linear-gradient(to bottom, rgba(0,0,0,.7) 0%, transparent 100%);
+  }
+}
+
+/* Safe-area bottom padding */
+.pb-safe { padding-bottom: calc(env(safe-area-inset-bottom) + 4px); }
+
+/* LIVE pulse */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: .5; transform: scale(.8); }
+}
+.live-dot { animation: live-pulse 1.2s ease-in-out infinite; }
+
+/* Ticker */
+@keyframes ticker {
+  0%   { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}
+.ticker-text { animation: ticker 18s linear infinite; white-space: nowrap; }
+
+/* Heart pop */
+@keyframes heart-pop {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.4); }
+  100% { transform: scale(1); }
+}
+.heart-pop { animation: heart-pop 0.3s ease-in-out; }
+
+/* Comment sheet slide-up */
+@keyframes slide-up {
+  from { transform: translateY(100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.slide-up { animation: slide-up 0.3s cubic-bezier(0.32, 0.72, 0, 1); }
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1a1a1a 25%, #2a2a2a 50%, #1a1a1a 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Fullscreen video — fill entire screen */
+:-webkit-full-screen video { object-fit: contain; width: 100vw; height: 100vh; }
+:fullscreen          video { object-fit: contain; width: 100vw; height: 100vh; }
+
+/* Spinner keyframes for VideoPlayer */
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Android TV / Leanback mode ─────────────────────────────────────── */
+.tv-mode {
+  /* Larger tap targets for remote navigation */
+  --tv-focus-color: rgba(254, 44, 85, 0.8);
+}
+
+/* Focus rings for D-pad navigation */
+.tv-mode *:focus-visible {
+  outline: 3px solid var(--tv-focus-color);
+  outline-offset: 2px;
+}
+
+/* TV mode: larger controls */
+.tv-mode button {
+  min-width: 48px;
+  min-height: 48px;
+}
+
+/* TV layout: side-by-side when wide enough */
+@media (min-width: 1280px) {
+  .tv-mode .tv-sidebar {
+    display: flex;
+    width: 320px;
+    flex-direction: column;
+    border-right: 1px solid rgba(255,255,255,0.1);
+  }
+}
+
+/* Smooth scroll for TV scrolling */
+.tv-mode [style*='scroll-snap-type'] {
+  scroll-behavior: smooth;
+}
