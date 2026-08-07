@@ -218,45 +218,56 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
 
           if (Hls.isSupported()) {
             const hls = new Hls({
-              // ── ABR: network-adaptive quality ─────────────────────
-              startLevel:              -1,
-              abrEwmaDefaultEstimate:  abrEstimate,
-              abrEwmaFastLive:         3.0,
-              abrEwmaSlowLive:         9.0,
-              abrBandWidthFactor:      0.85,
-              abrBandWidthUpFactor:    0.65,
-              maxLoadingDelay:         6,
+  // ── Adaptive Bitrate (Auto Resolution) ─────────────────────────────
+  startLevel: -1,
+  autoLevelEnabled: true,
+  capLevelToPlayerSize: true,
 
-              // ── Pre-buffer strategy: fill 60s ahead silently ───────
-              maxBufferLength:         60,
-              maxMaxBufferLength:      120,
-              maxBufferSize:           80 * 1000 * 1000, // 80MB
-              maxBufferHole:           0.5,
-              nudgeMaxRetry:           12,
-              nudgeOffset:             0.3,
-              highBufferWatchdogPeriod: 2,
+  abrEwmaDefaultEstimate: abrEstimate,
+  abrEwmaFastLive: 2.0,
+  abrEwmaSlowLive: 5.0,
+  abrBandWidthFactor: 0.75,
+  abrBandWidthUpFactor: 0.90,
+  maxLoadingDelay: 3,
 
-              // ── Background loading (not just active card) ──────────
-              enableWorker:            true,
-              progressive:             true,
-              startFragPrefetch:       true,
-              testBandwidth:           true,
-              autoStartLoad:           true,   // load even when paused
-              lowLatencyMode:          false,  // live TV, not ultra-low-latency
+  // ── Faster Startup & Smaller Buffer ────────────────────────────────
+  maxBufferLength: 20,
+  maxMaxBufferLength: 40,
+  backBufferLength: 8,
+  liveBackBufferLength: 0,
+  maxBufferSize: 40 * 1000 * 1000,
+  maxBufferHole: 0.3,
 
-              // ── Retry: aggressive on all error types ──────────────
-              manifestLoadingMaxRetry:        5,
-              manifestLoadingRetryDelay:      1000,
-              manifestLoadingMaxRetryTimeout: 20000,
-              levelLoadingMaxRetry:           5,
-              levelLoadingRetryDelay:         1000,
-              levelLoadingMaxRetryTimeout:    15000,
-              fragLoadingMaxRetry:            5,
-              fragLoadingRetryDelay:          1000,
-              fragLoadingMaxRetryTimeout:     15000,
+  // ── Better Recovery ────────────────────────────────────────────────
+  nudgeMaxRetry: 20,
+  nudgeOffset: 0.1,
+  highBufferWatchdogPeriod: 1,
 
-              xhrSetup: (xhr) => { xhr.timeout = 15000; },
-            });
+  // ── Streaming ──────────────────────────────────────────────────────
+  enableWorker: true,
+  progressive: true,
+  startFragPrefetch: true,
+  testBandwidth: true,
+  autoStartLoad: true,
+  lowLatencyMode: false,
+
+  // ── Retry Logic ────────────────────────────────────────────────────
+  manifestLoadingMaxRetry: 6,
+  manifestLoadingRetryDelay: 500,
+  manifestLoadingMaxRetryTimeout: 10000,
+
+  levelLoadingMaxRetry: 6,
+  levelLoadingRetryDelay: 500,
+  levelLoadingMaxRetryTimeout: 10000,
+
+  fragLoadingMaxRetry: 8,
+  fragLoadingRetryDelay: 500,
+  fragLoadingMaxRetryTimeout: 10000,
+
+  xhrSetup: (xhr) => {
+    xhr.timeout = 10000;
+  },
+});
 
             registerHls(hls as unknown as { destroy: () => void });
             hlsRef.current = hls as unknown as typeof hlsRef.current;
