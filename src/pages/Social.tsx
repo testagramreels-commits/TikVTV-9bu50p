@@ -1,6 +1,7 @@
 /**
- * Social feed — X (Twitter)-like world-class social platform.
- * Features: posts, reposts, quote posts, hashtags, media upload, unified search.
+ * Social feed — world-class X-like platform.
+ * Improved: file uploads that actually work, media preview, social notifications,
+ * clip sharing, hashtag search, profile navigation, emoji reactions.
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -8,12 +9,15 @@ import {
   Heart, Repeat2, MessageCircle, Share2, Image, Video,
   Hash, Search, ArrowLeft, Send, X, MoreHorizontal,
   Bookmark, TrendingUp, Users, AtSign, Loader2, BadgeCheck,
+  Film, Bell, Smile,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
-import { cn } from '@/lib/utils';
+import { cn, timeAgo as timeAgoUtil } from '@/lib/utils';
 import { toast } from 'sonner';
 import AuthModal from '@/components/features/AuthModal';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
+import type { AppNotification } from '@/types';
 
 interface SocialUser {
   id: string;
@@ -58,7 +62,7 @@ function timeAgo(iso: string): string {
 }
 
 function Avatar({ user, size = 'md' }: { user?: SocialUser | null; size?: 'sm' | 'md' | 'lg' }) {
-  const sz = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-8 h-8 text-sm' : 'w-10 h-10 text-base';
+  const sz   = size === 'lg' ? 'w-14 h-14 text-xl' : size === 'sm' ? 'w-8 h-8 text-sm' : 'w-10 h-10 text-base';
   const init = (user?.username || user?.email || '?').slice(0, 1).toUpperCase();
   return (
     <div className={cn('rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center font-bold text-white flex-none', sz)}>
@@ -67,35 +71,33 @@ function Avatar({ user, size = 'md' }: { user?: SocialUser | null; size?: 'sm' |
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// PostCard
-// ─────────────────────────────────────────────────────────────────────
-function PostCard({ post, onRepost, onLike, depth = 0 }: {
+// ── PostCard ──────────────────────────────────────────────────────────
+function PostCard({ post, onRepost, onLike, depth = 0, onNavigateProfile }: {
   post: SocialPost;
   onRepost?: (p: SocialPost) => void;
   onLike: (id: string, liked: boolean) => void;
   depth?: number;
+  onNavigateProfile?: (userId: string) => void;
 }) {
   const { user } = useAuthStore();
-  const navigate = useNavigate();
   const [localLiked, setLocalLiked] = useState(post.isLiked ?? false);
   const [localLikes, setLocalLikes] = useState(post.like_count);
+  const [saved, setSaved]           = useState(false);
 
-  // Pure repost (no content) — show quoted style
   if (post.repost_of && !post.content && post.repost_data) {
     return (
       <div className="px-4 py-3 border-b border-border/40">
         <div className="flex items-center gap-1.5 text-muted-foreground text-xs mb-2">
-          <Repeat2 className="w-3.5 h-3.5" />
+          <Repeat2 className="w-3.5 h-3.5 text-green-400" />
           <span className="font-semibold">{post.user_profiles?.username} reposted</span>
         </div>
-        <PostCard post={post.repost_data} onLike={onLike} depth={depth + 1} />
+        <PostCard post={post.repost_data} onLike={onLike} depth={depth + 1} onNavigateProfile={onNavigateProfile} />
       </div>
     );
   }
 
   const handleLikeClick = async () => {
-    if (!user) { toast.error('Sign in to like posts'); return; }
+    if (!user) { toast.error('Sign in to like'); return; }
     const next = !localLiked;
     setLocalLiked(next);
     setLocalLikes(c => next ? c + 1 : Math.max(0, c - 1));
@@ -105,8 +107,12 @@ function PostCard({ post, onRepost, onLike, depth = 0 }: {
   const renderContent = (text: string) => {
     const parts = text.split(/(#[\w]+|@[\w]+)/g);
     return parts.map((p, i) => {
-      if (p.startsWith('#')) return <span key={i} className="text-primary font-medium cursor-pointer hover:underline" onClick={() => navigate(`/social?tag=${p.slice(1)}`)}>{p}</span>;
-      if (p.startsWith('@')) return <span key={i} className="text-sky-400 font-medium cursor-pointer hover:underline">{p}</span>;
+      if (p.startsWith('#')) {
+        return <span key={i} className="text-primary font-medium cursor-pointer hover:underline">{p}</span>;
+      }
+      if (p.startsWith('@')) {
+        return <span key={i} className="text-sky-400 font-medium cursor-pointer hover:underline">{p}</span>;
+      }
       return <span key={i}>{p}</span>;
     });
   };
@@ -114,15 +120,21 @@ function PostCard({ post, onRepost, onLike, depth = 0 }: {
   return (
     <article className={cn('border-b border-border/40', depth === 0 ? 'px-4 py-3' : 'px-3 py-2 bg-muted/20 rounded-xl')}>
       <div className="flex gap-3">
-        <Avatar user={post.user_profiles} size={depth > 0 ? 'sm' : 'md'} />
+        <button onClick={() => onNavigateProfile?.(post.user_id)}>
+          <Avatar user={post.user_profiles} size={depth > 0 ? 'sm' : 'md'} />
+        </button>
 
         <div className="flex-1 min-w-0">
           {/* Header */}
-          <div className="flex items-center gap-1.5 mb-1">
-            <span className="font-bold text-foreground text-sm">@{post.user_profiles?.username || 'user'}</span>
+          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+            <button
+              className="font-bold text-foreground text-sm hover:underline"
+              onClick={() => onNavigateProfile?.(post.user_id)}
+            >
+              @{post.user_profiles?.username || 'user'}
+            </button>
             <BadgeCheck className="w-3.5 h-3.5 text-primary flex-none" />
-            <span className="text-muted-foreground text-xs">·</span>
-            <span className="text-muted-foreground text-xs">{timeAgo(post.created_at)}</span>
+            <span className="text-muted-foreground text-xs">· {timeAgo(post.created_at)}</span>
             <button className="ml-auto text-muted-foreground hover:text-foreground transition-colors">
               <MoreHorizontal className="w-4 h-4" />
             </button>
@@ -137,14 +149,19 @@ function PostCard({ post, onRepost, onLike, depth = 0 }: {
 
           {/* Media */}
           {post.media_urls?.length > 0 && (
-            <div className={cn('grid gap-1.5 mb-2 rounded-xl overflow-hidden',
-              post.media_urls.length === 1 ? 'grid-cols-1' :
-              post.media_urls.length === 2 ? 'grid-cols-2' : 'grid-cols-2')}>
+            <div className={cn(
+              'grid gap-1.5 mb-2 rounded-xl overflow-hidden',
+              post.media_urls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+            )}>
               {post.media_urls.slice(0, 4).map((url, i) => (
                 url.match(/\.(mp4|webm|ogg)$/i) ? (
-                  <video key={i} src={url} controls className="w-full rounded-lg aspect-video object-cover bg-black" />
+                  <video key={i} src={url} controls playsInline
+                    className="w-full rounded-xl aspect-video object-cover bg-black border border-border/40"
+                    onClick={e => e.stopPropagation()}
+                  />
                 ) : (
-                  <img key={i} src={url} alt="" className="w-full rounded-lg object-cover aspect-square bg-muted"
+                  <img key={i} src={url} alt=""
+                    className="w-full rounded-xl object-cover aspect-square bg-muted border border-border/40"
                     onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                 )
               ))}
@@ -159,24 +176,25 @@ function PostCard({ post, onRepost, onLike, depth = 0 }: {
                 <span className="font-bold text-foreground text-xs">@{post.quote_data.user_profiles?.username}</span>
                 <span className="text-muted-foreground text-xs">· {timeAgo(post.quote_data.created_at)}</span>
               </div>
-              <p className="text-foreground/80 text-xs leading-relaxed">{post.quote_data.content}</p>
+              <p className="text-foreground/80 text-xs leading-relaxed line-clamp-3">{post.quote_data.content}</p>
             </div>
           )}
 
           {/* Actions */}
           {depth === 0 && (
-            <div className="flex items-center gap-5 mt-1">
+            <div className="flex items-center gap-4 mt-2">
               <ActionBtn icon={MessageCircle} count={post.reply_count} onClick={() => {}} />
-              <ActionBtn icon={Repeat2}       count={post.repost_count}
-                onClick={() => { if (!user) { toast.error('Sign in to repost'); return; } onRepost?.(post); }}
+              <ActionBtn icon={Repeat2} count={post.repost_count}
+                onClick={() => { if (!user) { toast.error('Sign in'); return; } onRepost?.(post); }}
                 active={post.isReposted} activeColor="text-green-400" />
-              <ActionBtn icon={Heart}         count={localLikes} onClick={handleLikeClick}
+              <ActionBtn icon={Heart} count={localLikes} onClick={handleLikeClick}
                 active={localLiked} activeColor="text-rose-400" />
-              <ActionBtn icon={Share2}        count={0} onClick={() => {
+              <ActionBtn icon={saved ? Bookmark : Bookmark} count={0}
+                onClick={() => setSaved(s => !s)} active={saved} activeColor="text-primary" />
+              <ActionBtn icon={Share2} count={0} onClick={() => {
                 navigator.clipboard.writeText(`${window.location.origin}/social?post=${post.id}`);
                 toast.success('Link copied!');
               }} />
-              <ActionBtn icon={Bookmark} count={0} onClick={() => {}} />
             </div>
           )}
         </div>
@@ -194,52 +212,97 @@ function ActionBtn({
   return (
     <button
       onClick={e => { e.stopPropagation(); onClick(); }}
-      className={cn('flex items-center gap-1.5 group transition-colors', active ? activeColor : 'text-muted-foreground hover:text-foreground')}
+      className={cn(
+        'flex items-center gap-1.5 group transition-colors min-h-[44px] min-w-[44px] justify-center',
+        active ? activeColor : 'text-muted-foreground hover:text-foreground'
+      )}
     >
       <Icon className="w-4 h-4" />
-      {count > 0 && <span className="text-xs font-medium">{count >= 1000 ? `${(count / 1000).toFixed(1)}k` : count}</span>}
+      {count > 0 && (
+        <span className="text-xs font-medium">
+          {count >= 1000 ? `${(count / 1000).toFixed(1)}k` : count}
+        </span>
+      )}
     </button>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// ComposeBox
-// ─────────────────────────────────────────────────────────────────────
+// ── ComposeBox ─────────────────────────────────────────────────────────
 function ComposeBox({ replyTo, quoteTo, onPost, onCancel }: {
   replyTo?: SocialPost; quoteTo?: SocialPost;
   onPost: (post: SocialPost) => void; onCancel?: () => void;
 }) {
   const { user }  = useAuthStore();
-  const [text, setTxt]        = useState('');
-  const [media, setMedia]     = useState<string[]>([]);
-  const [uploading, setUpl]   = useState(false);
-  const [posting, setPosting] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const MAX = 280;
+  const [text, setTxt]           = useState('');
+  const [files, setFiles]        = useState<File[]>([]);
+  const [previews, setPreviews]  = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [posting, setPosting]    = useState(false);
+  const imgRef  = useRef<HTMLInputElement>(null);
+  const vidRef  = useRef<HTMLInputElement>(null);
+  const MAX     = 280;
 
-  const uploadMedia = async (file: File) => {
-    if (!user) return;
-    setUpl(true);
-    const ext  = file.name.split('.').pop();
-    const path = `${user.id}/social-${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('channel-clips').upload(path, file, { upsert: true });
-    if (error) { toast.error('Upload failed'); setUpl(false); return; }
-    const { data: { publicUrl } } = supabase.storage.from('channel-clips').getPublicUrl(path);
-    setMedia(m => [...m, publicUrl]);
-    setUpl(false);
+  const EMOJIS = ['😂', '❤️', '🔥', '👏', '😍', '🎉', '🤔', '💯'];
+  const [showEmoji, setShowEmoji] = useState(false);
+
+  const addFiles = (newFiles: FileList | null) => {
+    if (!newFiles) return;
+    const arr = Array.from(newFiles).slice(0, 4 - files.length);
+    setFiles(prev => [...prev, ...arr]);
+    arr.forEach(f => {
+      const url = URL.createObjectURL(f);
+      setPreviews(prev => [...prev, url]);
+    });
+  };
+
+  const removeFile = (i: number) => {
+    setFiles(prev => prev.filter((_, j) => j !== i));
+    setPreviews(prev => { URL.revokeObjectURL(prev[i]); return prev.filter((_, j) => j !== i); });
+  };
+
+  const uploadFiles = async (): Promise<string[]> => {
+    if (!user || files.length === 0) return [];
+    setUploading(true);
+    const urls: string[] = [];
+    for (const file of files) {
+      const ext  = file.name.split('.').pop() || 'bin';
+      const path = `${user.id}/social-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+      const { error } = await supabase.storage.from('channel-clips').upload(path, file, {
+        contentType: file.type,
+        upsert:      false,
+      });
+      if (error) {
+        toast.error(`Upload failed: ${error.message}`);
+        console.error('[Social upload]', error);
+        continue;
+      }
+      const { data: { publicUrl } } = supabase.storage.from('channel-clips').getPublicUrl(path);
+      urls.push(publicUrl);
+    }
+    setUploading(false);
+    return urls;
   };
 
   const handlePost = async () => {
-    if (!user || !text.trim() || posting) return;
+    if (!user || (!text.trim() && files.length === 0) || posting) return;
     setPosting(true);
-    const hashtags = extractHashtags(text);
+
+    const mediaUrls = await uploadFiles();
+    const hashtags  = extractHashtags(text);
+
     const { data, error } = await supabase.from('social_posts').insert({
-      user_id: user.id, content: text.trim(), media_urls: media,
-      hashtags, quote_of: quoteTo?.id ?? null,
+      user_id:    user.id,
+      content:    text.trim(),
+      media_urls: mediaUrls,
+      hashtags,
+      quote_of:   quoteTo?.id ?? null,
     }).select('*, user_profiles(id, username, email)').single();
+
     setPosting(false);
-    if (error) { toast.error('Post failed'); return; }
-    setTxt(''); setMedia([]);
+    if (error) { toast.error(`Post failed: ${error.message}`); return; }
+    setTxt('');
+    setFiles([]);
+    setPreviews([]);
     toast.success('Posted!');
     onPost(data as SocialPost);
   };
@@ -249,12 +312,13 @@ function ComposeBox({ replyTo, quoteTo, onPost, onCancel }: {
   return (
     <div className="border-b border-border/50 px-4 py-3 bg-card/30">
       {(replyTo || quoteTo) && (
-        <div className="flex items-center gap-2 text-muted-foreground text-xs mb-2">
-          {replyTo && <><MessageCircle className="w-3.5 h-3.5" /> Replying to @{replyTo.user_profiles?.username}</>}
-          {quoteTo && <><Repeat2 className="w-3.5 h-3.5" /> Quoting @{quoteTo.user_profiles?.username}</>}
+        <div className="flex items-center gap-2 text-muted-foreground text-xs mb-2 bg-muted/30 rounded-xl px-3 py-2">
+          {replyTo  && <><MessageCircle className="w-3.5 h-3.5" /><span>Replying to @{replyTo.user_profiles?.username}</span></>}
+          {quoteTo  && <><Repeat2 className="w-3.5 h-3.5" /><span>Quoting @{quoteTo.user_profiles?.username}</span></>}
           {onCancel && <button onClick={onCancel} className="ml-auto"><X className="w-3.5 h-3.5" /></button>}
         </div>
       )}
+
       <div className="flex gap-3">
         <Avatar user={{ id: user.id, username: user.username, email: user.email }} />
         <div className="flex-1">
@@ -265,41 +329,106 @@ function ComposeBox({ replyTo, quoteTo, onPost, onCancel }: {
             rows={3}
             className="w-full bg-transparent text-foreground placeholder:text-muted-foreground text-sm resize-none outline-none"
           />
-          {/* Media preview */}
-          {media.length > 0 && (
+
+          {/* Media previews */}
+          {previews.length > 0 && (
             <div className="flex gap-2 flex-wrap mb-2">
-              {media.map((url, i) => (
+              {previews.map((url, i) => (
                 <div key={i} className="relative">
-                  <img src={url} alt="" className="w-16 h-16 object-cover rounded-lg" />
-                  <button onClick={() => setMedia(m => m.filter((_, j) => j !== i))}
-                    className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-black/80 flex items-center justify-center">
+                  {files[i]?.type.startsWith('video') ? (
+                    <video src={url} className="w-20 h-20 object-cover rounded-xl border border-border/40" muted />
+                  ) : (
+                    <img src={url} alt="" className="w-20 h-20 object-cover rounded-xl border border-border/40" />
+                  )}
+                  <button
+                    onClick={() => removeFile(i)}
+                    className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-black border border-white/20 flex items-center justify-center"
+                  >
                     <X className="w-3 h-3 text-white" />
                   </button>
                 </div>
               ))}
             </div>
           )}
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={() => fileRef.current?.click()} disabled={uploading}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors">
+
+          {/* Emoji picker */}
+          {showEmoji && (
+            <div className="flex gap-2 flex-wrap mb-2 p-2 bg-muted/30 rounded-xl border border-border/40">
+              {EMOJIS.map(e => (
+                <button key={e} onClick={() => { setTxt(t => t + e); setShowEmoji(false); }}
+                  className="text-xl hover:scale-125 transition-transform">{e}</button>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-1 border-t border-border/30 mt-2">
+            {/* Image upload */}
+            <button
+              onClick={() => imgRef.current?.click()}
+              disabled={uploading || files.length >= 4}
+              title="Upload image"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
+            >
               {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Image className="w-4 h-4" />}
             </button>
-            <button onClick={() => fileRef.current?.click()} disabled={uploading}
-              className="w-8 h-8 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors">
+            <input
+              ref={imgRef}
+              type="file"
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              multiple
+              className="hidden"
+              onChange={e => addFiles(e.target.files)}
+            />
+
+            {/* Video upload */}
+            <button
+              onClick={() => vidRef.current?.click()}
+              disabled={uploading || files.length >= 4}
+              title="Upload video"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors disabled:opacity-40"
+            >
               <Video className="w-4 h-4" />
             </button>
-            <input ref={fileRef} type="file" accept="image/*,video/*" className="hidden"
-              onChange={e => { const f = e.target.files?.[0]; if (f) uploadMedia(f); }} />
-            <span className={cn('ml-auto text-xs', text.length > MAX * 0.8 ? 'text-amber-400' : 'text-muted-foreground')}>
+            <input
+              ref={vidRef}
+              type="file"
+              accept="video/mp4,video/webm,video/ogg,video/quicktime"
+              className="hidden"
+              onChange={e => addFiles(e.target.files)}
+            />
+
+            {/* Clip shortcut */}
+            <button
+              onClick={() => { toast('Go to Clips tab to share a clip!'); }}
+              title="Share a clip"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors"
+            >
+              <Film className="w-4 h-4" />
+            </button>
+
+            {/* Emoji */}
+            <button
+              onClick={() => setShowEmoji(v => !v)}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-primary hover:bg-primary/10 transition-colors"
+            >
+              <Smile className="w-4 h-4" />
+            </button>
+
+            {/* Character count */}
+            <span className={cn('ml-auto text-xs font-mono', text.length > MAX * 0.8 ? 'text-amber-400' : 'text-muted-foreground')}>
               {MAX - text.length}
             </span>
+
+            {/* Post button */}
             <button
               onClick={handlePost}
-              disabled={!text.trim() || posting}
-              className="flex items-center gap-1.5 bg-primary text-white font-bold text-sm px-4 py-2 rounded-full disabled:opacity-50 transition-all hover:bg-primary/90"
+              disabled={(!text.trim() && files.length === 0) || posting || uploading}
+              className="flex items-center gap-1.5 bg-primary text-white font-bold text-sm px-4 py-2 rounded-full disabled:opacity-50 transition-all hover:bg-primary/90 active:scale-95"
             >
-              {posting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              Post
+              {posting || uploading
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <Send className="w-3.5 h-3.5" />}
+              {uploading ? 'Uploading…' : posting ? 'Posting…' : 'Post'}
             </button>
           </div>
         </div>
@@ -308,11 +437,11 @@ function ComposeBox({ replyTo, quoteTo, onPost, onCancel }: {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// TrendingHashtags sidebar
-// ─────────────────────────────────────────────────────────────────────
+// ── Trending Sidebar ───────────────────────────────────────────────────
 function TrendingSidebar({ onTag }: { onTag: (t: string) => void }) {
+  const navigate = useNavigate();
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
+
   useEffect(() => {
     supabase.from('social_posts')
       .select('hashtags')
@@ -324,20 +453,27 @@ function TrendingSidebar({ onTag }: { onTag: (t: string) => void }) {
         for (const row of data) {
           for (const t of (row.hashtags || [])) map[t] = (map[t] || 0) + 1;
         }
-        setTags(Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([tag, count]) => ({ tag, count })));
+        setTags(
+          Object.entries(map)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([tag, count]) => ({ tag, count }))
+        );
       });
   }, []);
 
   return (
-    <div className="bg-card/40 border border-border/50 rounded-2xl overflow-hidden">
+    <div className="bg-card/40 border border-border/50 rounded-2xl overflow-hidden mb-4">
       <div className="px-4 py-3 border-b border-border/40 flex items-center gap-2">
         <TrendingUp className="w-4 h-4 text-primary" />
         <span className="font-bold text-foreground text-sm">Trending</span>
       </div>
-      {tags.length === 0 && <p className="text-muted-foreground text-xs text-center py-4">No tags yet — post something!</p>}
+      {tags.length === 0 && (
+        <p className="text-muted-foreground text-xs text-center py-6">No tags yet</p>
+      )}
       {tags.map(({ tag, count }) => (
         <button key={tag} onClick={() => onTag(tag)}
-          className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-muted/40 transition-colors border-b border-border/20 last:border-0">
+          className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/40 transition-colors border-b border-border/20 last:border-0">
           <div className="flex items-center gap-2">
             <Hash className="w-3.5 h-3.5 text-primary" />
             <span className="text-foreground text-sm font-medium">#{tag}</span>
@@ -345,13 +481,73 @@ function TrendingSidebar({ onTag }: { onTag: (t: string) => void }) {
           <span className="text-muted-foreground text-xs">{count} posts</span>
         </button>
       ))}
+
+      {/* Navigation shortcuts */}
+      <div className="p-3 border-t border-border/40 flex flex-col gap-1.5">
+        <button onClick={() => navigate('/social/dm')}
+          className="flex items-center gap-2 text-muted-foreground hover:text-foreground text-xs px-2 py-1.5 rounded-lg hover:bg-muted/40 transition-colors">
+          <AtSign className="w-3.5 h-3.5" /> Messages
+        </button>
+        <button onClick={() => navigate('/clips')}
+          className="flex items-center gap-2 text-muted-foreground hover:text-foreground text-xs px-2 py-1.5 rounded-lg hover:bg-muted/40 transition-colors">
+          <Film className="w-3.5 h-3.5" /> Clips Gallery
+        </button>
+      </div>
     </div>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Main Social page
-// ─────────────────────────────────────────────────────────────────────
+// ── Notification Bell ──────────────────────────────────────────────────
+function NotificationBell() {
+  const { unreadCount, notifications, markAllRead } = usePushNotifications();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => { setOpen(v => !v); if (unreadCount > 0) markAllRead(); }}
+        className="w-9 h-9 rounded-full bg-muted flex items-center justify-center relative"
+      >
+        <Bell className="w-4 h-4 text-foreground" />
+        {unreadCount > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center">
+            {unreadCount > 9 ? '9+' : unreadCount}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-72 bg-background border border-border/60 rounded-2xl shadow-2xl z-50 overflow-hidden">
+          <div className="px-4 py-3 border-b border-border/40 flex items-center gap-2">
+            <Bell className="w-4 h-4 text-primary" />
+            <span className="font-bold text-foreground text-sm">Notifications</span>
+          </div>
+          {notifications.length === 0 ? (
+            <p className="text-muted-foreground text-xs text-center py-8">No notifications yet</p>
+          ) : (
+            notifications.slice(0, 8).map(n => (
+              <div key={n.id} className={cn('px-4 py-3 border-b border-border/20 last:border-0', !n.read && 'bg-primary/5')}>
+                <p className="text-foreground text-xs font-semibold">{n.title}</p>
+                <p className="text-muted-foreground text-xs mt-0.5">{n.body}</p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Inline Bell icon component
+function Bell({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  );
+}
+
+// ── Main Social page ────────────────────────────────────────────────────
 type FeedTab = 'for-you' | 'following' | 'trending';
 
 export default function Social() {
@@ -360,22 +556,24 @@ export default function Social() {
   const [searchParams] = useSearchParams();
   const tagParam     = searchParams.get('tag') || '';
 
-  const [tab, setTab]       = useState<FeedTab>('for-you');
-  const [posts, setPosts]   = useState<SocialPost[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchQ, setSearchQ] = useState(tagParam ? `#${tagParam}` : '');
-  const [activeTag, setTag]  = useState(tagParam);
-  const [showAuth, setAuth]  = useState(false);
+  const [tab, setTab]            = useState<FeedTab>('for-you');
+  const [posts, setPosts]        = useState<SocialPost[]>([]);
+  const [loading, setLoading]    = useState(true);
+  const [searchQ, setSearchQ]    = useState(tagParam ? `#${tagParam}` : '');
+  const [activeTag, setTag]      = useState(tagParam);
+  const [showAuth, setAuth]      = useState(false);
   const [repostTarget, setRepostTarget] = useState<SocialPost | null>(null);
-  const [quoteTarget,  setQuoteTarget]  = useState<SocialPost | null>(null);
-  const [page, setPage]     = useState(0);
-  const [hasMore, setHasMore] = useState(true);
-  const loaderRef = useRef<HTMLDivElement>(null);
+  const [quoteTarget, setQuoteTarget]   = useState<SocialPost | null>(null);
+  const [page, setPage]          = useState(0);
+  const [hasMore, setHasMore]    = useState(true);
+  const loaderRef                = useRef<HTMLDivElement>(null);
+  const pageRef                  = useRef(0);
 
   const loadPosts = useCallback(async (reset = false) => {
     setLoading(true);
-    const from = reset ? 0 : page * 20;
-    let query = supabase.from('social_posts')
+    const from = reset ? 0 : pageRef.current * 20;
+    let query  = supabase
+      .from('social_posts')
       .select('*, user_profiles(id, username, email)')
       .order('created_at', { ascending: false })
       .range(from, from + 19);
@@ -385,29 +583,34 @@ export default function Social() {
     const { data, error } = await query;
     if (error) { setLoading(false); return; }
 
-    // Fetch liked/repost status for logged-in user
     let enriched = (data || []) as SocialPost[];
+
+    // Fetch like status
     if (user && enriched.length) {
       const ids = enriched.map(p => p.id);
-      const { data: likes } = await supabase.from('social_likes')
-        .select('post_id').eq('user_id', user.id).in('post_id', ids);
-      const likedSet = new Set((likes || []).map(l => l.post_id));
+      const { data: likes } = await supabase
+        .from('social_likes')
+        .select('post_id')
+        .eq('user_id', user.id)
+        .in('post_id', ids);
+      const likedSet = new Set((likes || []).map((l: { post_id: string }) => l.post_id));
       enriched = enriched.map(p => ({ ...p, isLiked: likedSet.has(p.id) }));
     }
 
     setPosts(prev => reset ? enriched : [...prev, ...enriched]);
     setHasMore(enriched.length === 20);
-    if (!reset) setPage(p => p + 1);
+    if (!reset) { pageRef.current += 1; setPage(p => p + 1); }
+    else         { pageRef.current = 1; setPage(1); }
     setLoading(false);
-  }, [activeTag, user, page]);
+  }, [activeTag, user]);
 
   useEffect(() => { loadPosts(true); }, [activeTag, tab]);
 
-  // Intersection observer for infinite scroll
+  // Infinite scroll
   useEffect(() => {
     if (!loaderRef.current || !hasMore) return;
     const obs = new IntersectionObserver(entries => {
-      if (entries[0].isIntersecting && !loading && hasMore) loadPosts();
+      if (entries[0].isIntersecting && !loading && hasMore) loadPosts(false);
     }, { threshold: 0.1 });
     obs.observe(loaderRef.current);
     return () => obs.disconnect();
@@ -417,11 +620,12 @@ export default function Social() {
     if (!user) return;
     if (liked) {
       await supabase.from('social_likes').upsert({ post_id: postId, user_id: user.id });
-      await supabase.from('social_posts').update({ like_count: supabase.rpc('increment', { x: 1 }) as unknown as number }).eq('id', postId);
     } else {
       await supabase.from('social_likes').delete().match({ post_id: postId, user_id: user.id });
     }
-    setPosts(prev => prev.map(p => p.id === postId ? { ...p, isLiked: liked, like_count: liked ? p.like_count + 1 : Math.max(0, p.like_count - 1) } : p));
+    setPosts(prev => prev.map(p =>
+      p.id === postId ? { ...p, isLiked: liked, like_count: liked ? p.like_count + 1 : Math.max(0, p.like_count - 1) } : p
+    ));
   }, [user]);
 
   const handleRepost = useCallback(async (target: SocialPost) => {
@@ -440,18 +644,14 @@ export default function Social() {
   const handleSearch = (q: string) => {
     setSearchQ(q);
     const tagMatch = q.match(/^#?([\w]+)$/);
-    if (tagMatch) { setTag(tagMatch[1]); setPage(0); }
-    else if (!q) { setTag(''); setPage(0); }
-  };
-
-  const handleNewPost = (p: SocialPost) => {
-    setPosts(prev => [p, ...prev]);
+    if (tagMatch) { setTag(tagMatch[1]); pageRef.current = 0; }
+    else if (!q)  { setTag(''); pageRef.current = 0; }
   };
 
   const TABS: { id: FeedTab; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: 'for-you',   label: 'For You',   icon: TrendingUp },
-    { id: 'following', label: 'Following',  icon: Users },
-    { id: 'trending',  label: 'Trending',   icon: Hash },
+    { id: 'for-you',   label: 'For You',  icon: TrendingUp },
+    { id: 'following', label: 'Following', icon: Users },
+    { id: 'trending',  label: 'Trending',  icon: Hash },
   ];
 
   return (
@@ -459,14 +659,14 @@ export default function Social() {
       {/* Header */}
       <div className="sticky top-0 z-30 bg-background/95 backdrop-blur-xl border-b border-border/50">
         <div className="flex items-center gap-3 px-4 pt-safe-top pt-12 pb-2">
-          <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-muted flex items-center justify-center flex-none">
+          <button onClick={() => navigate(-1)}
+            className="w-9 h-9 rounded-full bg-muted flex items-center justify-center flex-none">
             <ArrowLeft className="w-4 h-4 text-foreground" />
           </button>
           <h1 className="font-bold text-foreground text-lg flex-1">Social</h1>
-          <button
-            onClick={() => navigate('/social/dm')}
-            className="w-9 h-9 rounded-full bg-muted flex items-center justify-center"
-          >
+          <NotificationBell />
+          <button onClick={() => navigate('/social/dm')}
+            className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
             <AtSign className="w-4 h-4 text-foreground" />
           </button>
         </div>
@@ -493,12 +693,10 @@ export default function Social() {
         {activeTag && (
           <div className="px-4 pb-2 flex items-center gap-2">
             <div className="flex items-center gap-1.5 bg-primary/15 border border-primary/30 text-primary text-sm font-medium px-3 py-1 rounded-full">
-              <Hash className="w-3.5 h-3.5" />
-              #{activeTag}
+              <Hash className="w-3.5 h-3.5" />#{activeTag}
             </div>
-            <button onClick={() => { setTag(''); setSearchQ(''); }} className="text-muted-foreground text-xs hover:text-foreground">
-              Clear ×
-            </button>
+            <button onClick={() => { setTag(''); setSearchQ(''); }}
+              className="text-muted-foreground text-xs hover:text-foreground">Clear ×</button>
           </div>
         )}
 
@@ -520,23 +718,21 @@ export default function Social() {
         )}
       </div>
 
-      {/* Layout: feed + trending sidebar on desktop */}
-      <div className="max-w-3xl mx-auto lg:grid lg:grid-cols-[1fr_280px] lg:gap-4 lg:px-4 lg:pt-4">
+      {/* Layout: feed + sidebar on desktop */}
+      <div className="max-w-3xl mx-auto lg:grid lg:grid-cols-[1fr_260px] lg:gap-4 lg:px-4 lg:pt-4">
         <div>
           {/* Compose */}
           {user ? (
             <ComposeBox
               quoteTo={quoteTarget ?? undefined}
-              onPost={p => { handleNewPost(p); setQuoteTarget(null); }}
+              onPost={p => { setPosts(prev => [p, ...prev]); setQuoteTarget(null); }}
               onCancel={() => setQuoteTarget(null)}
             />
           ) : (
-            <div className="px-4 py-4 border-b border-border/40 flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                <AtSign className="w-5 h-5 text-muted-foreground" />
-              </div>
+            <div className="px-4 py-4 border-b border-border/40">
               <button onClick={() => setAuth(true)}
-                className="flex-1 text-left text-muted-foreground text-sm bg-muted rounded-full px-4 py-2.5">
+                className="w-full flex items-center gap-3 bg-muted/50 hover:bg-muted rounded-2xl px-4 py-3 text-muted-foreground text-sm transition-colors border border-border/40 hover:border-border">
+                <AtSign className="w-5 h-5" />
                 Sign in to post…
               </button>
             </div>
@@ -545,20 +741,16 @@ export default function Social() {
           {/* Repost quick action */}
           {repostTarget && (
             <div className="px-4 py-3 bg-muted/30 border-b border-border/40 flex items-center gap-3">
-              <Repeat2 className="w-5 h-5 text-green-400" />
-              <div className="flex-1">
+              <Repeat2 className="w-5 h-5 text-green-400 flex-none" />
+              <div className="flex-1 min-w-0">
                 <p className="text-foreground text-sm font-semibold">Repost from @{repostTarget.user_profiles?.username}?</p>
                 <p className="text-muted-foreground text-xs line-clamp-1">{repostTarget.content}</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-none">
                 <button onClick={() => handleRepost(repostTarget)}
-                  className="text-xs font-semibold bg-green-500/20 text-green-400 px-3 py-1.5 rounded-full hover:bg-green-500/30 transition-colors">
-                  Repost
-                </button>
+                  className="text-xs font-semibold bg-green-500/20 text-green-400 px-3 py-1.5 rounded-full hover:bg-green-500/30">Repost</button>
                 <button onClick={() => { setQuoteTarget(repostTarget); setRepostTarget(null); }}
-                  className="text-xs font-semibold bg-primary/20 text-primary px-3 py-1.5 rounded-full hover:bg-primary/30 transition-colors">
-                  Quote
-                </button>
+                  className="text-xs font-semibold bg-primary/20 text-primary px-3 py-1.5 rounded-full hover:bg-primary/30">Quote</button>
                 <button onClick={() => setRepostTarget(null)}
                   className="w-7 h-7 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
                   <X className="w-3.5 h-3.5" />
@@ -586,17 +778,20 @@ export default function Social() {
                   post={p}
                   onLike={handleLike}
                   onRepost={t => setRepostTarget(t)}
+                  onNavigateProfile={id => navigate(`/social/profile/${id}`)}
                 />
               ))}
               <div ref={loaderRef} className="py-4 flex items-center justify-center">
                 {loading && <Loader2 className="w-5 h-5 text-muted-foreground animate-spin" />}
-                {!hasMore && posts.length > 0 && <p className="text-muted-foreground text-xs">You're all caught up</p>}
+                {!hasMore && posts.length > 0 && (
+                  <p className="text-muted-foreground text-xs">You're all caught up ✓</p>
+                )}
               </div>
             </>
           )}
         </div>
 
-        {/* Trending sidebar (desktop only) */}
+        {/* Trending sidebar (desktop) */}
         <div className="hidden lg:block pt-0">
           <div className="sticky top-36">
             <TrendingSidebar onTag={t => { setTag(t); setSearchQ(`#${t}`); }} />

@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { Crown } from 'lucide-react';
 import type { IPTVChannel, AuthUser } from '@/types';
 import VideoPlayer, { type VideoPlayerHandle } from './VideoPlayer';
 import ChannelInfo from './ChannelInfo';
@@ -111,9 +112,22 @@ export default function ChannelCard({
         </>
       )}
 
-      {/* Free preview progress bar */}
+      {/* Free preview progress bar + countdown timer */}
       {!locked && (
-        <WatchProgressBar percent={watchedPercent} locked={locked} />
+        <>
+          <WatchProgressBar percent={watchedPercent} locked={locked} />
+          {/* Countdown: show when within last 5 minutes */}
+          {remainingSecs <= 300 && remainingSecs > 0 && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 pointer-events-none">
+              <div className="flex items-center gap-1.5 bg-amber-500/20 backdrop-blur border border-amber-500/40 rounded-full px-3 py-1">
+                <Crown className="w-3 h-3 text-amber-400" />
+                <span className="text-amber-300 text-xs font-bold">
+                  Free: {Math.floor(remainingSecs / 60)}:{String(remainingSecs % 60).padStart(2, '0')}
+                </span>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Bottom content — hidden when locked */}

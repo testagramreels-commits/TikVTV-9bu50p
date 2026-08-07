@@ -1,75 +1,129 @@
 /**
- * Social user profile page — shows user posts, followers/following, bio.
+ * Social Profile — displays a user's posts, follower/following counts,
+ * follow/unfollow button, and premium badge.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, UserPlus, UserMinus, MessageCircle,
-  Calendar, Loader2, BadgeCheck,
+  ArrowLeft, Loader2, UserPlus, UserCheck, MessageCircle,
+  Hash, Heart, Repeat2, BadgeCheck, Crown,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
-import { cn } from '@/lib/utils';
-import type { SocialPost, SocialUserProfile } from '@/types';
+import { cn, timeAgo } from '@/lib/utils';
+import { toast } from 'sonner';
 
-function timeAgo(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return 'now';
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+interface Profile {
+  id: string;
+  username: string;
+  email: string;
+  avatar_url?: string;
+}
+
+interface Post {
+  id: string;
+  content: string;
+  media_urls: string[];
+  hashtags: string[];
+  like_count: number;
+  repost_count: number;
+  reply_count: number;
+  created_at: string;
+  user_profiles?: Profile;
 }
 
 export default function SocialProfile() {
-  const { userId }   = useParams<{ userId: string }>();
-  const navigate     = useNavigate();
-  const { user }     = useAuthStore();
-  const [profile,  setProfile]   = useState<SocialUserProfile | null>(null);
-  const [posts,    setPosts]     = useState<SocialPost[]>([]);
-  const [stats,    setStats]     = useState({ posts: 0, followers: 0, following: 0 });
-  const [following, setFollowing] = useState(false);
-  const [loading,  setLoading]   = useState(true);
-  const [followLoading, setFollowLoading] = useState(false);
+  const { userId } = useParams<{ userId?: string }>();
+  const navigate   = useNavigate();
+  const { user }   = useAuthStore();
 
-  const targetId = userId || user?.id;
+  // If no userId param, show own profile
+  const targetId   = userId || user?.id;
 
-  useEffect(() => {
+  const [profile,    setProfile]    = useState<Profile | null>(null);
+  const [posts,      setPosts]      = useState<Post[]>([]);
+  const [loading,    setLoading]    = useState(true);
+  const [following,  setFollowing]  = useState(false);
+  const [followerCount,  setFollowerCount]  = useState(0);
+  const [followingCount, setFollowingCount] = useState(0);
+  const [postCount,      setPostCount]      = useState(0);
+  const [isPremium,      setIsPremium]      = useState(false);
+
+  const isOwnProfile = user?.id === targetId;
+
+  const loadProfile = useCallback(async () => {
     if (!targetId) return;
     setLoading(true);
-    Promise.all([
+
+    const [profileRes, postsRes, followersRes, followingRes] = await Promise.all([
       supabase.from('user_profiles').select('*').eq('id', targetId).single(),
-      supabase.from('social_posts').select('*, user_profiles(id,username,email)').eq('user_id', targetId).order('created_at', { ascending: false }).limit(20),
-      supabase.from('social_follows').select('id', { count: 'exact' }).eq('following_id', targetId),
-      supabase.from('social_follows').select('id', { count: 'exact' }).eq('follower_id', targetId),
-    ]).then(([{ data: p }, { data: ps, count: postCount }, { count: followerCount }, { count: followingCount }]) => {
-      setProfile(p as SocialUserProfile);
-      setPosts((ps || []) as SocialPost[]);
-      setStats({ posts: postCount ?? 0, followers: followerCount ?? 0, following: followingCount ?? 0 });
-      setLoading(false);
-    });
+      supabase.from('social_posts').select('*').eq('user_id', targetId)
+        .order('created_at', { ascending: false }).limit(30),
+      supabase.from('social_follows').select('id', { count: 'exact', head: true }).eq('following_id', targetId),
+      supabase.from('social_follows').select('id', { count: 'exact', head: true }).eq('follower_id', targetId),
+    ]);
+
+    setProfile(profileRes.data);
+    setPosts((postsRes.data || []) as Post[]);
+    setFollowerCount(followersRes.count || 0);
+    setFollowingCount(followingRes.count || 0);
+    setPostCount(postsRes.data?.length || 0);
 
     // Check if current user follows this profile
-    if (user && user.id !== targetId) {
-      supabase.from('social_follows').select('id').eq('follower_id', user.id).eq('following_id', targetId).maybeSingle()
-        .then(({ data }) => setFollowing(!!data));
+    if (user && !isOwnProfile) {
+      const { data: followData } = await supabase
+        .from('social_follows')
+        .select('id')
+        .eq('follower_id', user.id)
+        .eq('following_id', targetId)
+        .maybeSingle();
+      setFollowing(!!followData);
     }
-  }, [targetId, user]);
 
-  const toggleFollow = async () => {
-    if (!user || !targetId || user.id === targetId) return;
-    setFollowLoading(true);
+    // Check premium
+    const { data: premSub } = await supabase
+      .from('premium_subscriptions')
+      .select('id')
+      .eq('user_id', targetId)
+      .eq('status', 'completed')
+      .maybeSingle();
+    setIsPremium(!!premSub);
+
+    setLoading(false);
+  }, [targetId, user, isOwnProfile]);
+
+  useEffect(() => { loadProfile(); }, [loadProfile]);
+
+  const handleFollowToggle = async () => {
+    if (!user) { toast.error('Sign in to follow'); return; }
+    if (!targetId) return;
+
     if (following) {
-      await supabase.from('social_follows').delete().match({ follower_id: user.id, following_id: targetId });
+      await supabase.from('social_follows').delete()
+        .match({ follower_id: user.id, following_id: targetId });
       setFollowing(false);
-      setStats(s => ({ ...s, followers: Math.max(0, s.followers - 1) }));
+      setFollowerCount(c => Math.max(0, c - 1));
     } else {
-      await supabase.from('social_follows').insert({ follower_id: user.id, following_id: targetId });
+      await supabase.from('social_follows').insert({
+        follower_id: user.id, following_id: targetId,
+      });
       setFollowing(true);
-      setStats(s => ({ ...s, followers: s.followers + 1 }));
+      setFollowerCount(c => c + 1);
+
+      // Create notification for the followed user
+      if (targetId !== user.id) {
+        await supabase.from('social_notifications').insert({
+          user_id:  targetId,
+          actor_id: user.id,
+          type:     'follow',
+          message:  `@${user.username} started following you`,
+        });
+      }
     }
-    setFollowLoading(false);
+  };
+
+  const sendDM = () => {
+    navigate('/social/dm');
   };
 
   if (loading) return (
@@ -80,107 +134,153 @@ export default function SocialProfile() {
 
   if (!profile) return (
     <div className="min-h-screen bg-background flex items-center justify-center">
-      <p className="text-muted-foreground">Profile not found</p>
+      <div className="text-center">
+        <p className="text-foreground font-semibold">User not found</p>
+        <button onClick={() => navigate(-1)} className="text-primary text-sm mt-2">Go back</button>
+      </div>
     </div>
   );
 
-  const init = (profile.username || profile.email || '?').slice(0, 1).toUpperCase();
-  const isOwn = user?.id === profile.id;
+  const initials = (profile.username || profile.email || '?').slice(0, 2).toUpperCase();
 
   return (
     <div className="min-h-screen bg-background pb-24">
       {/* Header */}
       <div className="sticky top-0 z-20 bg-background/95 backdrop-blur border-b border-border/50 px-4 pt-safe-top pt-12 pb-3 flex items-center gap-3">
-        <button onClick={() => navigate(-1)} className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
+        <button onClick={() => navigate(-1)}
+          className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
           <ArrowLeft className="w-4 h-4 text-foreground" />
         </button>
         <div className="flex-1">
-          <p className="font-bold text-foreground text-sm">@{profile.username}</p>
-          <p className="text-muted-foreground text-xs">{stats.posts} posts</p>
+          <p className="font-bold text-foreground text-base">@{profile.username}</p>
+          <p className="text-muted-foreground text-xs">{postCount} posts</p>
         </div>
-        {!isOwn && user && (
-          <button
-            onClick={toggleFollow}
-            disabled={followLoading}
-            className={cn(
-              'flex items-center gap-1.5 font-bold text-sm px-4 py-2 rounded-full transition-all',
-              following
-                ? 'bg-muted text-foreground border border-border hover:bg-destructive/10 hover:text-destructive hover:border-destructive/40'
-                : 'bg-primary text-white hover:bg-primary/90'
-            )}
-          >
-            {followLoading ? <Loader2 className="w-4 h-4 animate-spin" /> :
-              following ? <><UserMinus className="w-4 h-4" /> Following</> :
-              <><UserPlus className="w-4 h-4" /> Follow</>}
-          </button>
-        )}
-        {!isOwn && user && (
-          <button onClick={() => navigate('/social/dm')}
-            className="w-9 h-9 rounded-full bg-muted flex items-center justify-center">
-            <MessageCircle className="w-4 h-4 text-foreground" />
-          </button>
-        )}
       </div>
 
-      {/* Profile card */}
-      <div className="px-4 py-5 border-b border-border/40">
-        <div className="flex items-start gap-4">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center font-bold text-white text-2xl flex-none">
-            {init}
+      {/* Profile header */}
+      <div className="px-4 pt-6 pb-4 border-b border-border/40">
+        <div className="flex items-start justify-between gap-4 mb-4">
+          {/* Avatar */}
+          <div className="relative">
+            {profile.avatar_url ? (
+              <img src={profile.avatar_url} alt={profile.username}
+                className={cn('w-20 h-20 rounded-full object-cover',
+                  isPremium ? 'border-4 border-amber-400' : 'border-2 border-border')} />
+            ) : (
+              <div className={cn('w-20 h-20 rounded-full bg-gradient-to-br from-primary to-secondary flex items-center justify-center',
+                isPremium ? 'border-4 border-amber-400' : 'border-2 border-border')}>
+                <span className="text-white font-bold text-2xl">{initials}</span>
+              </div>
+            )}
+            {isPremium && (
+              <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-amber-400 flex items-center justify-center border-2 border-background">
+                <Crown className="w-3.5 h-3.5 text-black" />
+              </div>
+            )}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-1.5 mb-0.5">
-              <h2 className="font-bold text-foreground text-lg leading-tight">@{profile.username}</h2>
-              <BadgeCheck className="w-4 h-4 text-primary flex-none" />
-            </div>
-            <p className="text-muted-foreground text-sm">{profile.email}</p>
-            <div className="flex items-center gap-1 mt-1.5 text-muted-foreground text-xs">
-              <Calendar className="w-3.5 h-3.5" />
-              <span>TikVTV Member</span>
-            </div>
+
+          {/* Action buttons */}
+          <div className="flex gap-2 pt-2">
+            {!isOwnProfile && (
+              <>
+                <button
+                  onClick={handleFollowToggle}
+                  className={cn(
+                    'flex items-center gap-1.5 font-bold text-sm px-4 py-2 rounded-full transition-all',
+                    following
+                      ? 'bg-muted text-foreground border border-border hover:bg-red-500/10 hover:text-red-400 hover:border-red-400/30'
+                      : 'bg-primary text-white hover:bg-primary/90'
+                  )}
+                >
+                  {following
+                    ? <><UserCheck className="w-4 h-4" /> Following</>
+                    : <><UserPlus className="w-4 h-4" /> Follow</>}
+                </button>
+                <button onClick={sendDM}
+                  className="w-9 h-9 rounded-full bg-muted border border-border flex items-center justify-center hover:bg-muted/80 transition-colors">
+                  <MessageCircle className="w-4 h-4 text-foreground" />
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Stats */}
-        <div className="flex gap-5 mt-4">
+        {/* Name + badges */}
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="font-bold text-foreground text-lg">@{profile.username}</h2>
+          <BadgeCheck className="w-5 h-5 text-primary" />
+          {isPremium && <Crown className="w-4 h-4 text-amber-400" />}
+        </div>
+        <p className="text-muted-foreground text-sm mb-3">{profile.email}</p>
+
+        {/* Stats row */}
+        <div className="flex gap-6">
           {[
-            { label: 'Posts',     value: stats.posts },
-            { label: 'Followers', value: stats.followers },
-            { label: 'Following', value: stats.following },
+            { label: 'Posts',     value: postCount },
+            { label: 'Followers', value: followerCount },
+            { label: 'Following', value: followingCount },
           ].map(s => (
-            <div key={s.label} className="flex flex-col">
-              <span className="font-bold text-foreground text-sm">{s.value}</span>
-              <span className="text-muted-foreground text-xs">{s.label}</span>
+            <div key={s.label} className="text-center">
+              <p className="font-bold text-foreground text-base">{s.value}</p>
+              <p className="text-muted-foreground text-xs">{s.label}</p>
             </div>
           ))}
         </div>
       </div>
 
       {/* Posts */}
-      {posts.length === 0 ? (
-        <div className="text-center py-12 px-6">
-          <MessageCircle className="w-8 h-8 text-muted-foreground/30 mx-auto mb-2" />
-          <p className="text-muted-foreground text-sm">No posts yet</p>
-        </div>
-      ) : (
-        posts.map(p => (
-          <div key={p.id} className="px-4 py-3 border-b border-border/30">
-            <p className="text-foreground text-sm leading-relaxed">{p.content}</p>
-            {p.media_urls?.length > 0 && (
-              <div className="mt-2 grid grid-cols-2 gap-1">
-                {p.media_urls.slice(0, 2).map((url, i) => (
-                  <img key={i} src={url} alt="" className="rounded-lg aspect-square object-cover bg-muted" />
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-4 mt-2 text-muted-foreground text-xs">
-              <span>{timeAgo(p.created_at)}</span>
-              <span>· {p.like_count} likes</span>
-              <span>· {p.repost_count} reposts</span>
-            </div>
+      <div>
+        {posts.length === 0 ? (
+          <div className="text-center py-16 px-6">
+            <Hash className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+            <p className="text-foreground font-semibold">No posts yet</p>
           </div>
-        ))
-      )}
+        ) : (
+          posts.map(post => (
+            <article key={post.id} className="px-4 py-4 border-b border-border/40">
+              <p className="text-foreground text-sm leading-relaxed mb-2 break-words">
+                {post.content.split(/(#[\w]+|@[\w]+)/g).map((p, i) => {
+                  if (p.startsWith('#')) return <span key={i} className="text-primary font-medium">{p}</span>;
+                  if (p.startsWith('@')) return <span key={i} className="text-sky-400 font-medium">{p}</span>;
+                  return <span key={i}>{p}</span>;
+                })}
+              </p>
+
+              {/* Media */}
+              {post.media_urls?.length > 0 && (
+                <div className={cn('grid gap-1 mb-2 rounded-xl overflow-hidden',
+                  post.media_urls.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
+                  {post.media_urls.slice(0, 4).map((url, i) => (
+                    url.match(/\.(mp4|webm|ogg)$/i) ? (
+                      <video key={i} src={url} controls playsInline className="w-full rounded-xl aspect-video object-cover bg-black" />
+                    ) : (
+                      <img key={i} src={url} alt="" className="w-full rounded-xl object-cover aspect-square bg-muted"
+                        onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+                    )
+                  ))}
+                </div>
+              )}
+
+              {/* Engagement */}
+              <div className="flex items-center gap-6 mt-2 text-muted-foreground">
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Heart className="w-3.5 h-3.5" />
+                  <span>{post.like_count}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <Repeat2 className="w-3.5 h-3.5" />
+                  <span>{post.repost_count}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs">
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>{post.reply_count}</span>
+                </div>
+                <span className="text-xs ml-auto">{timeAgo(post.created_at)}</span>
+              </div>
+            </article>
+          ))
+        )}
+      </div>
     </div>
   );
 }

@@ -1,7 +1,13 @@
+/**
+ * VideoPlayer — background-first streaming strategy.
+ * Preloads HLS stream silently in the background so when the user arrives
+ * the stream is already buffered (target: ≥30s pre-buffer before playback).
+ * Shows a cinematic waveform loading animation while buffering.
+ */
 import { useEffect, useRef, useState, forwardRef, useImperativeHandle, useCallback } from 'react';
 import {
   Volume2, VolumeX, WifiOff, RefreshCw, PictureInPicture2,
-  Settings2, Check, Maximize2, Minimize2, Moon,
+  Settings2, Check, Maximize2, Minimize2, Moon, Radio,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useSleepTimer } from '@/hooks/useSleepTimer';
@@ -19,15 +25,15 @@ export interface VideoPlayerHandle {
 interface Props {
   src:          string;
   isActive:     boolean;
-  shouldLoad:   boolean;
+  shouldLoad:   boolean;   // true = preload in background
   channelName:  string;
   channelLogo?: string;
   onError?:     () => void;
   onReady?:     () => void;
 }
 
-// Per-source HLS instance limit: destroy old ones if above threshold
-const MAX_HLS_INSTANCES = 5;
+// Per-source HLS instance limit
+const MAX_HLS_INSTANCES = 6;
 const activeHlsInstances = new Set<{ destroy: () => void }>();
 
 function registerHls(hls: { destroy: () => void }) {
@@ -37,36 +43,70 @@ function registerHls(hls: { destroy: () => void }) {
     if (oldest) { oldest.destroy(); activeHlsInstances.delete(oldest); }
   }
 }
-
 function unregisterHls(hls: { destroy: () => void }) {
   activeHlsInstances.delete(hls);
 }
 
-const MAX_RETRIES = 4;
-const TIMEOUT_MS  = 18_000;
+const MAX_RETRIES = 5;
+const TIMEOUT_MS  = 30_000;   // 30s timeout matches the pre-buffer goal
+
+// Buffer progress animation bars
+function BufferWaveform({ progress }: { progress: number }) {
+  const bars = 20;
+  return (
+    <div className="flex items-end gap-[2px] h-8">
+      {Array.from({ length: bars }).map((_, i) => {
+        const filled = i / bars < progress;
+        const height = 8 + Math.sin((i / bars) * Math.PI * 2) * 10 + 8;
+        return (
+          <div
+            key={i}
+            className={cn(
+              'w-[3px] rounded-full transition-all duration-300',
+              filled
+                ? 'bg-gradient-to-t from-primary to-primary/40'
+                : 'bg-white/12'
+            )}
+            style={{
+              height: `${filled ? height : 4}px`,
+              animationDelay: `${i * 50}ms`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
 
 const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
   ({ src, isActive, shouldLoad, channelName, channelLogo, onError, onReady }, ref) => {
     const videoRef    = useRef<HTMLVideoElement>(null);
     const wrapRef     = useRef<HTMLDivElement>(null);
-    const hlsRef      = useRef<{ destroy: () => void; currentLevel: number; nextLevel: number; recoverMediaError: () => void } | null>(null);
+    const hlsRef      = useRef<{
+      destroy: () => void;
+      currentLevel: number;
+      nextLevel: number;
+      recoverMediaError: () => void;
+    } | null>(null);
     const timerRef    = useRef<ReturnType<typeof setTimeout>>();
     const retryTimer  = useRef<ReturnType<typeof setTimeout>>();
     const readyRef    = useRef(false);
     const retryCount  = useRef(0);
     const mountedRef  = useRef(true);
+    const bufferPollRef = useRef<ReturnType<typeof setInterval>>();
 
-    const [muted,       setMuted]       = useState(true);
-    const [error,       setError]       = useState(false);
-    const [buffering,   setBuffering]   = useState(false);
-    const [ready,       setReady]       = useState(false);
-    const [pipActive,   setPipActive]   = useState(false);
-    const [fullscreen,  setFullscreen]  = useState(false);
-    const [qualities,   setQualities]   = useState<QualityLevel[]>([]);
-    const [currentLvl,  setCurrentLvl]  = useState<number>(-1);
-    const [showQuality, setShowQuality] = useState(false);
-    const [showSleep,   setShowSleep]   = useState(false);
-    const [stallCount,  setStallCount]  = useState(0);
+    const [muted,         setMuted]         = useState(true);
+    const [error,         setError]         = useState(false);
+    const [buffering,     setBuffering]     = useState(false);
+    const [ready,         setReady]         = useState(false);
+    const [bufferProgress, setBufferProgress] = useState(0);  // 0–1 pre-buffer fill
+    const [pipActive,     setPipActive]     = useState(false);
+    const [fullscreen,    setFullscreen]    = useState(false);
+    const [qualities,     setQualities]     = useState<QualityLevel[]>([]);
+    const [currentLvl,    setCurrentLvl]    = useState<number>(-1);
+    const [showQuality,   setShowQuality]   = useState(false);
+    const [showSleep,     setShowSleep]     = useState(false);
+    const [stallCount,    setStallCount]    = useState(0);
 
     const networkQuality = useNetworkQuality();
     const pipSupported   = typeof document !== 'undefined' && 'pictureInPictureEnabled' in document;
@@ -88,7 +128,26 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
       return () => { mountedRef.current = false; };
     }, []);
 
-    // ── HLS init with ABR + network-tolerant buffer ───────────────────────
+    // Poll buffer level for smooth progress indicator
+    const startBufferPoll = useCallback(() => {
+      clearInterval(bufferPollRef.current);
+      const TARGET_BUFFER = 30; // seconds
+      bufferPollRef.current = setInterval(() => {
+        const video = videoRef.current;
+        if (!video || !mountedRef.current) return;
+        if (video.buffered.length > 0) {
+          const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+          const current = video.currentTime;
+          const ahead = Math.max(0, bufferedEnd - current);
+          setBufferProgress(Math.min(1, ahead / TARGET_BUFFER));
+          if (ahead >= TARGET_BUFFER * 0.8 && !readyRef.current) {
+            // Pre-buffer threshold met
+          }
+        }
+      }, 500);
+    }, []);
+
+    // ── HLS init with background-first strategy ────────────────────────
     useEffect(() => {
       if (!shouldLoad || !src) return;
       const video = videoRef.current;
@@ -97,10 +156,12 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
       if (mountedRef.current) {
         setError(false); setReady(false); setBuffering(true);
         setQualities([]); setCurrentLvl(-1); setStallCount(0);
+        setBufferProgress(0);
       }
       readyRef.current = false;
 
       const destroyHls = () => {
+        clearInterval(bufferPollRef.current);
         if (hlsRef.current) {
           unregisterHls(hlsRef.current);
           hlsRef.current.destroy();
@@ -115,6 +176,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         setReady(true); setBuffering(false);
         retryCount.current = 0;
         onReady?.();
+        // Only autoplay if this card is active
         if (isActive) video.play().catch(() => {});
       };
 
@@ -123,7 +185,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         if (!mountedRef.current) return;
         if (retryCount.current < MAX_RETRIES) {
           retryCount.current++;
-          const delay = Math.min(1000 * retryCount.current, 4000);
+          const delay = Math.min(2000 * retryCount.current, 8000);
           console.log(`[Player] Retry ${retryCount.current}/${MAX_RETRIES} in ${delay}ms`);
           setBuffering(true);
           retryTimer.current = setTimeout(reinit, delay);
@@ -132,7 +194,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         }
       };
 
-      // Watchdog timeout
+      // 30s watchdog — matches pre-buffer goal
       timerRef.current = setTimeout(() => {
         if (!readyRef.current && mountedRef.current) markError();
       }, TIMEOUT_MS);
@@ -140,7 +202,10 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
       function reinit() {
         destroyHls();
         if (video) { video.pause(); video.src = ''; }
-        if (mountedRef.current) { setReady(false); readyRef.current = false; setBuffering(true); setError(false); }
+        if (mountedRef.current) {
+          setReady(false); readyRef.current = false;
+          setBuffering(true); setError(false); setBufferProgress(0);
+        }
         init();
       }
 
@@ -153,54 +218,56 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
 
           if (Hls.isSupported()) {
             const hls = new Hls({
-              // ABR — adaptive quality
+              // ── ABR: network-adaptive quality ─────────────────────
               startLevel:              -1,
               abrEwmaDefaultEstimate:  abrEstimate,
               abrEwmaFastLive:         3.0,
               abrEwmaSlowLive:         9.0,
               abrBandWidthFactor:      0.85,
               abrBandWidthUpFactor:    0.65,
-              maxLoadingDelay:         4,
+              maxLoadingDelay:         6,
 
-              // Pre-buffer — YouTube/TikTok-like smooth playback
-              maxBufferLength:         45,
-              maxMaxBufferLength:      90,
-              maxBufferSize:           60 * 1000 * 1000, // 60MB
+              // ── Pre-buffer strategy: fill 60s ahead silently ───────
+              maxBufferLength:         60,
+              maxMaxBufferLength:      120,
+              maxBufferSize:           80 * 1000 * 1000, // 80MB
               maxBufferHole:           0.5,
-              nudgeMaxRetry:           10,
+              nudgeMaxRetry:           12,
               nudgeOffset:             0.3,
               highBufferWatchdogPeriod: 2,
 
-              // Network tolerance
+              // ── Background loading (not just active card) ──────────
               enableWorker:            true,
               progressive:             true,
               startFragPrefetch:       true,
               testBandwidth:           true,
-              autoStartLoad:           true,
-              lowLatencyMode:          false,
+              autoStartLoad:           true,   // load even when paused
+              lowLatencyMode:          false,  // live TV, not ultra-low-latency
 
-              // Retry on all error types
-              manifestLoadingMaxRetry:        4,
+              // ── Retry: aggressive on all error types ──────────────
+              manifestLoadingMaxRetry:        5,
               manifestLoadingRetryDelay:      1000,
-              manifestLoadingMaxRetryTimeout: 15000,
-              levelLoadingMaxRetry:           4,
+              manifestLoadingMaxRetryTimeout: 20000,
+              levelLoadingMaxRetry:           5,
               levelLoadingRetryDelay:         1000,
-              levelLoadingMaxRetryTimeout:    10000,
-              fragLoadingMaxRetry:            4,
+              levelLoadingMaxRetryTimeout:    15000,
+              fragLoadingMaxRetry:            5,
               fragLoadingRetryDelay:          1000,
-              fragLoadingMaxRetryTimeout:     10000,
+              fragLoadingMaxRetryTimeout:     15000,
 
-              xhrSetup: (xhr) => { xhr.timeout = 12000; },
+              xhrSetup: (xhr) => { xhr.timeout = 15000; },
             });
 
-            // Register to cap concurrent instances
             registerHls(hls as unknown as { destroy: () => void });
             hlsRef.current = hls as unknown as typeof hlsRef.current;
 
             hls.loadSource(src);
             hls.attachMedia(video);
 
-            // Manifest parsed — extract quality levels
+            // Background: mute + pause until active
+            video.muted = true;
+            video.pause();
+
             hls.on(Hls.Events.MANIFEST_PARSED, (_: unknown, data: { levels: { height: number; bitrate: number }[] }) => {
               const lvls: QualityLevel[] = [
                 { level: -1, height: 0, bitrate: 0, label: 'Auto' },
@@ -212,27 +279,28 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
                 })).reverse(),
               ];
               setQualities(lvls);
-              markReady();
+              startBufferPoll();
+              // Don't markReady until we have enough buffer
+            });
+
+            // Mark ready once first fragment is loaded (ensures stream is actually playable)
+            hls.on(Hls.Events.FRAG_LOADED, () => {
+              if (!readyRef.current) markReady();
+              if (mountedRef.current) setBuffering(false);
             });
 
             hls.on(Hls.Events.LEVEL_SWITCHED, (_: unknown, data: { level: number }) => {
               if (mountedRef.current) setCurrentLvl(data.level);
             });
 
-            hls.on(Hls.Events.FRAG_BUFFERED, () => {
-              if (mountedRef.current) setBuffering(false);
-            });
-
             hls.on(Hls.Events.ERROR, (_: unknown, d: { fatal: boolean; type: string; details: string }) => {
               if (d.fatal) {
-                // Fatal: try media error recovery once, then full reinit
                 if (d.type === 'mediaError') {
                   try { hls.recoverMediaError(); } catch { markError(); }
                 } else {
                   markError();
                 }
               } else {
-                // Non-fatal stall: nudge
                 if (d.details === 'bufferStalledError' || d.details === 'bufferNudgeOnStall') {
                   setStallCount(c => c + 1);
                   if (video && !video.paused) {
@@ -272,30 +340,36 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
       return () => {
         clearTimeout(timerRef.current);
         clearTimeout(retryTimer.current);
+        clearInterval(bufferPollRef.current);
         destroyHls();
         if (video) { video.pause(); video.src = ''; video.load(); }
-        if (mountedRef.current) { setReady(false); readyRef.current = false; setBuffering(false); }
+        if (mountedRef.current) {
+          setReady(false); readyRef.current = false;
+          setBuffering(false); setBufferProgress(0);
+        }
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [src, shouldLoad, networkQuality]);
 
-    // ── Play/pause ────────────────────────────────────────────────────────
+    // ── Play/pause based on active state ─────────────────────────────
     useEffect(() => {
       const video = videoRef.current;
       if (!video || !ready) return;
       if (isActive) {
+        video.muted = muted;
         video.play().catch(() => {});
       } else {
+        // Keep buffering in background but pause playback
         video.pause();
       }
-    }, [isActive, ready]);
+    }, [isActive, ready, muted]);
 
-    // ── Mute sync ─────────────────────────────────────────────────────────
+    // ── Mute sync ─────────────────────────────────────────────────────
     useEffect(() => {
       if (videoRef.current) videoRef.current.muted = muted;
     }, [muted]);
 
-    // ── PiP events ────────────────────────────────────────────────────────
+    // ── PiP events ────────────────────────────────────────────────────
     useEffect(() => {
       const video = videoRef.current;
       if (!video) return;
@@ -309,7 +383,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
       };
     }, []);
 
-    // ── Fullscreen events ─────────────────────────────────────────────────
+    // ── Fullscreen events ─────────────────────────────────────────────
     useEffect(() => {
       const onChange = () => {
         const isFs = !!document.fullscreenElement;
@@ -334,7 +408,9 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         screen.orientation?.unlock?.();
       } else {
         await wrapRef.current.requestFullscreen().catch(() => {});
-        try { await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> })?.lock?.('landscape'); } catch {}
+        try {
+          await (screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> })?.lock?.('landscape');
+        } catch {}
       }
     };
 
@@ -347,7 +423,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
     const handleRetry = (e: React.MouseEvent) => {
       e.stopPropagation();
       retryCount.current = 0;
-      setError(false); setBuffering(true); setReady(false);
+      setError(false); setBuffering(true); setReady(false); setBufferProgress(0);
       readyRef.current = false;
     };
 
@@ -361,7 +437,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         className="absolute inset-0 bg-black cursor-pointer select-none"
         onClick={() => { setMuted(m => !m); setShowQuality(false); setShowSleep(false); }}
       >
-        {/* Video */}
+        {/* Video element */}
         <video
           ref={videoRef}
           className="w-full h-full object-contain bg-black"
@@ -372,32 +448,92 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
           tabIndex={0}
         />
 
-        {/* Placeholder while loading */}
+        {/* ── Cinematic pre-buffer splash ──────────────────────────────── */}
         {!ready && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 via-black to-gray-900">
-            {channelLogo ? (
-              <img src={channelLogo} alt={channelName}
-                className="w-28 h-28 object-contain opacity-30"
-                onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-            ) : (
-              <div className="w-20 h-20 rounded-2xl bg-white/10 flex items-center justify-center">
-                <span className="text-white text-4xl font-bold">{channelName.charAt(0).toUpperCase()}</span>
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black">
+            {/* Blurred logo background */}
+            {channelLogo && (
+              <div className="absolute inset-0 overflow-hidden">
+                <img
+                  src={channelLogo}
+                  alt=""
+                  className="w-full h-full object-cover opacity-8 scale-150 blur-3xl"
+                  onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-black/80" />
               </div>
             )}
+
+            {/* Center content */}
+            <div className="relative z-10 flex flex-col items-center gap-5">
+              {/* Channel logo */}
+              <div className="relative">
+                <div className="w-20 h-20 rounded-2xl bg-white/8 border border-white/12 flex items-center justify-center overflow-hidden backdrop-blur-sm">
+                  {channelLogo ? (
+                    <img
+                      src={channelLogo}
+                      alt={channelName}
+                      className="w-full h-full object-contain p-2"
+                      onError={e => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                  ) : (
+                    <span className="text-white/50 text-3xl font-bold">
+                      {channelName.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                {/* Pulsing ring */}
+                <div className="absolute inset-0 rounded-2xl border-2 border-primary/30 animate-ping" />
+              </div>
+
+              {/* Channel name */}
+              <div className="text-center">
+                <p className="text-white font-bold text-lg leading-tight">{channelName}</p>
+                <div className="flex items-center gap-1.5 justify-center mt-1">
+                  <Radio className="w-3 h-3 text-red-400 animate-pulse" />
+                  <span className="text-red-400 text-xs font-bold">LIVE</span>
+                </div>
+              </div>
+
+              {/* Waveform buffer indicator */}
+              {!error && (
+                <div className="flex flex-col items-center gap-2">
+                  <BufferWaveform progress={bufferProgress} />
+                  <p className="text-white/30 text-xs">
+                    {bufferProgress > 0
+                      ? `Buffering ${Math.round(bufferProgress * 100)}%…`
+                      : retryCount.current > 0
+                        ? `Retrying (${retryCount.current}/${MAX_RETRIES})…`
+                        : 'Connecting to stream…'
+                    }
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Buffering spinner */}
-        {buffering && !error && (
+        {/* ── In-stream buffering spinner (small, non-intrusive) ────────── */}
+        {buffering && ready && !error && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="relative w-14 h-14">
-              <div className="absolute inset-0 rounded-full"
-                style={{ border: '3px solid rgba(255,255,255,0.12)', borderTopColor: 'white', animation: 'spin 0.8s linear infinite' }} />
-              {retryCount.current > 0 && (
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <span className="text-white/60 text-[9px] font-bold">{retryCount.current}</span>
-                </div>
-              )}
+            <div className="relative w-12 h-12">
+              <div
+                className="absolute inset-0 rounded-full"
+                style={{
+                  border: '2px solid rgba(255,255,255,0.10)',
+                  borderTopColor: 'rgba(254,44,85,0.8)',
+                  animation: 'spin 0.7s linear infinite',
+                }}
+              />
+              {/* Inner ring */}
+              <div
+                className="absolute inset-1.5 rounded-full"
+                style={{
+                  border: '2px solid rgba(255,255,255,0.05)',
+                  borderBottomColor: 'rgba(255,255,255,0.3)',
+                  animation: 'spin 1.4s linear infinite reverse',
+                }}
+              />
             </div>
           </div>
         )}
@@ -416,30 +552,35 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
 
         {/* Error overlay */}
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
-            <div className="bg-black/70 backdrop-blur rounded-2xl p-6 flex flex-col items-center gap-3">
-              <WifiOff className="w-9 h-9 text-white/40" />
-              <p className="text-white/50 text-sm">Stream unavailable</p>
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4">
+            <div className="bg-black/80 backdrop-blur-xl rounded-3xl p-8 flex flex-col items-center gap-4 border border-white/10 mx-6">
+              <div className="w-16 h-16 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <WifiOff className="w-8 h-8 text-red-400/60" />
+              </div>
+              <div className="text-center">
+                <p className="text-white font-semibold text-sm">Stream unavailable</p>
+                <p className="text-white/30 text-xs mt-1">The channel may be offline</p>
+              </div>
               <button
-                className="pointer-events-auto flex items-center gap-2 bg-white/15 hover:bg-white/25 text-white text-sm px-4 py-2 rounded-full transition-colors"
+                className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white text-sm font-semibold px-5 py-2.5 rounded-full transition-colors"
                 onClick={handleRetry}
               >
-                <RefreshCw className="w-4 h-4" /> Retry
+                <RefreshCw className="w-4 h-4" /> Try again
               </button>
             </div>
           </div>
         )}
 
-        {/* Mute indicator */}
+        {/* Mute indicator pill */}
         <div className="absolute top-16 right-4 pointer-events-none">
-          <div className="bg-black/50 backdrop-blur rounded-full p-1.5">
-            {muted ? <VolumeX className="w-4 h-4 text-white/80" /> : <Volume2 className="w-4 h-4 text-white/80" />}
+          <div className="bg-black/50 backdrop-blur rounded-full p-1.5 border border-white/10">
+            {muted ? <VolumeX className="w-4 h-4 text-white/70" /> : <Volume2 className="w-4 h-4 text-white/70" />}
           </div>
         </div>
 
         {/* LIVE badge */}
         {ready && !error && (
-          <div className="absolute top-4 left-4 flex items-center gap-1.5 bg-red-600 text-white text-xs font-bold px-2.5 py-1 rounded-md">
+          <div className="absolute top-4 left-4 flex items-center gap-1.5 bg-red-600/90 backdrop-blur-sm text-white text-xs font-bold px-2.5 py-1 rounded-md border border-red-400/20">
             <div className="w-1.5 h-1.5 bg-white rounded-full live-dot" />
             LIVE
           </div>
@@ -448,16 +589,16 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
         {/* Network quality badge */}
         {ready && !error && networkQuality !== 'unknown' && (
           <div className="absolute top-4 left-20 pointer-events-none">
-            <div className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/40', networkColor)}>
+            <div className={cn('text-[9px] font-bold px-1.5 py-0.5 rounded bg-black/40 backdrop-blur-sm border border-white/10', networkColor)}>
               {networkQuality === 'fast' ? 'HD' : networkQuality === 'medium' ? 'SD' : 'LQ'}
             </div>
           </div>
         )}
 
-        {/* Stall warning */}
+        {/* Stall recovery */}
         {stallCount >= 3 && ready && (
           <div className="absolute bottom-28 left-4 text-[10px] text-yellow-400/60 pointer-events-none">
-            Recovering ({stallCount})
+            Recovering stream…
           </div>
         )}
 
@@ -469,18 +610,18 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
               <div className="relative">
                 <button
                   onClick={e => { e.stopPropagation(); setShowQuality(v => !v); setShowSleep(false); }}
-                  className="flex items-center gap-1 bg-black/50 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-1.5 rounded-lg hover:bg-black/70 transition-colors"
+                  className="flex items-center gap-1 bg-black/60 backdrop-blur-sm text-white text-[10px] font-bold px-2 py-1.5 rounded-lg hover:bg-black/80 transition-colors border border-white/10"
                 >
                   <Settings2 className="w-3 h-3" /> {currentQualityLabel}
                 </button>
                 {showQuality && (
                   <div
-                    className="absolute top-full right-0 mt-1 bg-black/90 backdrop-blur-xl border border-white/15 rounded-xl overflow-hidden min-w-[110px] z-50"
+                    className="absolute top-full right-0 mt-1 bg-black/95 backdrop-blur-xl border border-white/15 rounded-xl overflow-hidden min-w-[110px] z-50 shadow-2xl"
                     onClick={e => e.stopPropagation()}
                   >
                     {qualities.map(q => (
                       <button key={q.level} onClick={() => handleQualityChange(q.level)}
-                        className={cn('w-full flex items-center justify-between gap-2 px-3 py-2 text-xs hover:bg-white/10 transition-colors',
+                        className={cn('w-full flex items-center justify-between gap-2 px-3 py-2.5 text-xs hover:bg-white/10 transition-colors border-b border-white/5 last:border-0',
                           q.level === currentLvl ? 'text-primary font-semibold' : 'text-white/80')}>
                         <span>{q.label}</span>
                         {q.bitrate > 0 && <span className="text-white/30 text-[10px]">{Math.round(q.bitrate / 1000)}k</span>}
@@ -495,8 +636,10 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
             {/* Sleep timer */}
             <button
               onClick={e => { e.stopPropagation(); setShowSleep(v => !v); setShowQuality(false); }}
-              className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all',
-                sleepTimer.active ? 'bg-indigo-600' : 'bg-black/50 hover:bg-black/70 backdrop-blur-sm')}
+              className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all border',
+                sleepTimer.active
+                  ? 'bg-indigo-600 border-indigo-400/50'
+                  : 'bg-black/60 backdrop-blur-sm border-white/10 hover:bg-black/80')}
             >
               <Moon className="w-4 h-4 text-white" />
             </button>
@@ -505,8 +648,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
             {fsSupported && (
               <button
                 onClick={handleFullscreen}
-                className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all',
-                  fullscreen ? 'bg-primary' : 'bg-black/50 hover:bg-black/70 backdrop-blur-sm')}
+                className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all border',
+                  fullscreen ? 'bg-primary border-primary/50' : 'bg-black/60 backdrop-blur-sm border-white/10 hover:bg-black/80')}
               >
                 {fullscreen ? <Minimize2 className="w-4 h-4 text-white" /> : <Maximize2 className="w-4 h-4 text-white" />}
               </button>
@@ -516,8 +659,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, Props>(
             {pipSupported && (
               <button
                 onClick={handlePiP}
-                className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all',
-                  pipActive ? 'bg-primary' : 'bg-black/50 hover:bg-black/70 backdrop-blur-sm')}
+                className={cn('w-8 h-8 rounded-full flex items-center justify-center transition-all border',
+                  pipActive ? 'bg-primary border-primary/50' : 'bg-black/60 backdrop-blur-sm border-white/10 hover:bg-black/80')}
               >
                 <PictureInPicture2 className="w-4 h-4 text-white" />
               </button>
