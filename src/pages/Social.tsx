@@ -1,5 +1,5 @@
 /**
- * Social feed — world-class X-like platform.
+ * Social feed — world-class X-like platform with Stories.
  * Improved: file uploads that actually work, media preview, social notifications,
  * clip sharing, hashtag search, profile navigation, emoji reactions.
  */
@@ -17,6 +17,7 @@ import { cn, timeAgo as timeAgoUtil } from '@/lib/utils';
 import { toast } from 'sonner';
 import AuthModal from '@/components/features/AuthModal';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
+import SocialStories from '@/components/features/SocialStories';
 import type { AppNotification } from '@/types';
 
 interface SocialUser {
@@ -721,6 +722,9 @@ export default function Social() {
       {/* Layout: feed + sidebar on desktop */}
       <div className="max-w-3xl mx-auto lg:grid lg:grid-cols-[1fr_260px] lg:gap-4 lg:px-4 lg:pt-4">
         <div>
+          {/* Stories */}
+          <SocialStories />
+
           {/* Compose */}
           {user ? (
             <ComposeBox
