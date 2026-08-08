@@ -1,23 +1,28 @@
 /**
- * Premium subscription hook — KES plans (unlimited=100, pro=200)
- * Checks via DB directly for speed, falls back to edge function.
+ * Premium subscription hook — KES plans (unlimited=KES 100, pro=KES 200)
+ * Passes window.location.origin as callback so PesaPal redirects correctly.
  */
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/authStore';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 
-const CACHE_KEY = 'tikvtv_premium_v3';
+const CACHE_KEY = 'tikvtv_premium_v4';
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 
-interface PremiumState {
-  isPremium: boolean;
-  loading: boolean;
-  plan?: string;
+export interface PremiumSubscription {
+  isPremium:  boolean;
+  plan?:      string;
   expiresAt?: string;
+  amount?:    number;
+  currency?:  string;
 }
 
-function getCached(): { isPremium: boolean; plan?: string; expiresAt?: string } | null {
+interface PremiumState extends PremiumSubscription {
+  loading: boolean;
+}
+
+function getCached(): PremiumSubscription | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
@@ -27,7 +32,7 @@ function getCached(): { isPremium: boolean; plan?: string; expiresAt?: string } 
   } catch { return null; }
 }
 
-function setCache(data: { isPremium: boolean; plan?: string; expiresAt?: string }) {
+function setCache(data: PremiumSubscription) {
   try { localStorage.setItem(CACHE_KEY, JSON.stringify({ data, ts: Date.now() })); } catch {}
 }
 
@@ -47,10 +52,9 @@ export function usePremium() {
 
     setState(s => ({ ...s, loading: true }));
 
-    // Fast DB check first (no edge function round-trip)
     const { data: sub } = await supabase
       .from('premium_subscriptions')
-      .select('status, expires_at, plan')
+      .select('status, expires_at, plan, amount, currency')
       .eq('user_id', user.id)
       .eq('status', 'completed')
       .gte('expires_at', new Date().toISOString())
@@ -58,10 +62,12 @@ export function usePremium() {
       .limit(1)
       .maybeSingle();
 
-    const result = {
-      isPremium:  !!sub,
-      plan:       sub?.plan,
-      expiresAt:  sub?.expires_at,
+    const result: PremiumSubscription = {
+      isPremium: !!sub,
+      plan:      sub?.plan,
+      expiresAt: sub?.expires_at,
+      amount:    sub?.amount,
+      currency:  sub?.currency,
     };
     setCache(result);
     setState({ ...result, loading: false });
@@ -69,18 +75,36 @@ export function usePremium() {
 
   useEffect(() => { checkPremium(); }, [checkPremium]);
 
+  // Fetch all subscriptions for the subscription management UI
+  const getSubscriptionHistory = async () => {
+    if (!user) return [];
+    const { data } = await supabase
+      .from('premium_subscriptions')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    return data || [];
+  };
+
   const initiatePurchase = async (plan: 'unlimited' | 'pro' = 'unlimited') => {
     if (!user) return { error: 'Not authenticated' };
+
+    // Pass the real app origin so PesaPal redirects back here
     const callback_url = `${window.location.origin}/premium/callback`;
 
     const { data, error } = await supabase.functions.invoke('pesapal-payment', {
-      body: { action: 'initiate', plan, callback_url },
+      body: { action: 'initiate', plan, callback_url, origin: window.location.origin },
     });
 
     if (error) {
       let msg = error.message;
       if (error instanceof FunctionsHttpError) {
-        try { const txt = await error.context.text(); msg = `[${error.context.status}] ${txt}`; } catch {}
+        try {
+          const statusCode = error.context?.status ?? 500;
+          const textContent = await error.context?.text();
+          msg = `[Code: ${statusCode}] ${textContent || error.message || 'Unknown error'}`;
+        } catch { msg = error.message || 'Failed to read response'; }
       }
       return { error: msg };
     }
@@ -96,5 +120,5 @@ export function usePremium() {
     return { isPaid: data?.isPaid ?? false, status: data?.status };
   };
 
-  return { ...state, checkPremium, initiatePurchase, checkOrderStatus };
+  return { ...state, checkPremium, initiatePurchase, checkOrderStatus, getSubscriptionHistory };
 }

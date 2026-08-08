@@ -84,10 +84,22 @@ function ClipViewer({ clips, startIndex, onClose }: {
   const shareToSocial = async () => {
     if (!user) { toast.error('Sign in to share'); return; }
     const ch = clip.channel;
-    const content = `Check out this 60-second clip from ${ch?.name || 'Live TV'} 📺 ${clip.public_url}`;
-    // Copy link + prompt user to paste in Social
-    await navigator.clipboard.writeText(content);
-    toast.success('Clip link copied! Paste it in Social to share.');
+    // Post directly to social feed
+    const { error } = await (await import('@/lib/supabase')).supabase
+      .from('social_posts')
+      .insert({
+        user_id:    user.id,
+        content:    `Check out this 60-second clip from ${ch?.name || 'Live TV'} 📺\n\nRecorded live · expires in 24h #tikvtv ${ch?.categories?.[0] ? `#${ch.categories[0]}` : ''}`,
+        media_urls: [clip.public_url],
+        hashtags:   ['tikvtv', 'livetv', ch?.categories?.[0] || 'general'].filter(Boolean),
+        channel_id: clip.channel_id,
+      });
+    if (error) {
+      toast.error('Share failed — trying clipboard');
+      await navigator.clipboard.writeText(`${ch?.name || 'Live TV'} clip: ${clip.public_url}`);
+    } else {
+      toast.success('Clip shared to Social! 🎉');
+    }
   };
 
   const deleteClip = async () => {

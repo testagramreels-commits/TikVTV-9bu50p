@@ -78,9 +78,15 @@ export default function WatchParty() {
     if (roomId && rooms.length > 0) {
       const room = rooms.find(r => r.id === roomId);
       if (room) joinRoom(room);
+    } else if (roomId && rooms.length === 0 && !loading) {
+      // Room not in public list — try direct lookup
+      supabase.from('watch_party_rooms').select('*').eq('id', roomId).maybeSingle().then(({ data }) => {
+        if (data) joinRoom({ ...data, channel: getChannelById(data.channel_id) });
+        else toast.error('Room not found or has expired');
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params, rooms.length]);
+  }, [params, rooms.length, loading]);
 
   async function loadRooms() {
     setLoading(true);
@@ -185,8 +191,19 @@ export default function WatchParty() {
 
   function copyRoomLink() {
     if (!activeRoom) return;
-    navigator.clipboard.writeText(`${window.location.origin}/party?room=${activeRoom.id}`)
-      .then(() => toast.success('Room link copied!'));
+    const link = `${window.location.origin}/party?room=${activeRoom.id}`;
+    navigator.clipboard.writeText(link)
+      .then(() => toast.success('Invite link copied! Share it with friends 🎉'));
+  }
+
+  function shareRoomLink() {
+    if (!activeRoom) return;
+    const link = `${window.location.origin}/party?room=${activeRoom.id}`;
+    if (navigator.share) {
+      navigator.share({ title: `Join: ${activeRoom.name}`, text: 'Watch live TV together!', url: link });
+    } else {
+      copyRoomLink();
+    }
   }
 
   // ── Room view ──────────────────────────────────────────────────────
@@ -212,8 +229,8 @@ export default function WatchParty() {
                 {ch && <span className="text-primary text-xs truncate">· {ch.name}</span>}
               </div>
             </div>
-            <button onClick={copyRoomLink}
-              className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors">
+            <button onClick={shareRoomLink}
+              className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors" title="Share invite link">
               <Copy className="w-4 h-4 text-white/60" />
             </button>
             <button

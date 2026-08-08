@@ -284,6 +284,14 @@ export default function Profile() {
             <span className="text-white/40 text-base">{theme === 'dark' ? '☀️' : '🌙'}</span>
             Switch to {theme === 'dark' ? 'Light' : 'Dark'} theme
           </button>
+          <button onClick={() => navigate('/subscription')}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
+            <Crown className="w-4 h-4 text-amber-400/60" />Manage Subscription
+          </button>
+          <button onClick={() => navigate('/notifications')}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
+            <span className="text-white/40 text-base">🔔</span>Notification Centre
+          </button>
           <button onClick={() => navigate('/health')}
             className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
             <span className="text-white/40 text-base">📡</span>Stream health monitor

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Globe, LogIn, LogOut, Settings, ChevronDown, Tv, Radio } from 'lucide-react';
+import LiveChannelSearch from '@/components/features/LiveChannelSearch';
 import { useAuthStore } from '@/stores/authStore';
 import { useLangStore } from '@/stores/langStore';
 import { useT, LANGUAGE_OPTIONS } from '@/lib/i18n';
@@ -20,9 +21,10 @@ export default function Header({ liveCount, totalChannels }: Props) {
   const t                 = useT();
   const { lang, setLang } = useLangStore();
 
-  const [showAuth, setShowAuth] = useState(false);
-  const [showLang, setShowLang] = useState(false);
-  const [showUser, setShowUser] = useState(false);
+  const [showAuth,   setShowAuth]   = useState(false);
+  const [showLang,   setShowLang]   = useState(false);
+  const [showUser,   setShowUser]   = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   const handleLogout = () => {
     logout();
@@ -62,7 +64,7 @@ export default function Header({ liveCount, totalChannels }: Props) {
         <div className="flex items-center gap-1">
           {/* Search */}
           <button
-            onClick={() => navigate('/search')}
+            onClick={() => setShowSearch(true)}
             aria-label="Search"
             className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors"
           >
@@ -161,7 +163,8 @@ export default function Header({ liveCount, totalChannels }: Props) {
         </div>
       </header>
 
-      {showAuth && <AuthModal onClose={() => setShowAuth(false)} />}
+      {showAuth   && <AuthModal          onClose={() => setShowAuth(false)}   />}
+      {showSearch && <LiveChannelSearch   onClose={() => setShowSearch(false)} />}
     </>
   );
 }

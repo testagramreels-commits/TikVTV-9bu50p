@@ -1,20 +1,21 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Home, Search, Compass, Flame,
-  Film, User, Moon, Sun, Shield, Radio, Users,
+  Film, User, Moon, Sun, Shield, Radio, Users, Bell,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAiSuggestions } from '@/hooks/useAiSuggestions';
 import { useThemeStore } from '@/stores/themeStore';
+import { useNotifications } from '@/hooks/useNotifications';
 
 const tabs = [
-  { id: 'home',     path: '/',         icon: Home,    label: 'Home' },
-  { id: 'search',   path: '/search',   icon: Search,  label: 'Search' },
-  { id: 'explore',  path: '/explore',  icon: Compass, label: 'Explore', ai: true },
-  { id: 'trending', path: '/trending', icon: Flame,   label: 'Hot' },
-  { id: 'social',   path: '/social',   icon: Users,   label: 'Social' },
-  { id: 'party',    path: '/party',    icon: Radio,   label: 'Party' },
-  { id: 'profile',  path: '/profile',  icon: User,    label: 'Me' },
+  { id: 'home',          path: '/',               icon: Home,    label: 'Home' },
+  { id: 'search',        path: '/search',          icon: Search,  label: 'Search' },
+  { id: 'explore',       path: '/explore',         icon: Compass, label: 'Explore', ai: true },
+  { id: 'social',        path: '/social',          icon: Users,   label: 'Social' },
+  { id: 'notifications', path: '/notifications',   icon: Bell,    label: 'Alerts', notif: true },
+  { id: 'party',         path: '/party',           icon: Radio,   label: 'Party' },
+  { id: 'profile',       path: '/profile',         icon: User,    label: 'Me' },
 ];
 
 export default function BottomNav() {
@@ -22,6 +23,7 @@ export default function BottomNav() {
   const navigate  = useNavigate();
   const { topCategories, hasData } = useAiSuggestions();
   const { theme, toggleTheme } = useThemeStore();
+  const { unreadCount } = useNotifications();
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-xl border-t border-border">
@@ -51,6 +53,11 @@ export default function BottomNav() {
               {tab.ai && (
                 <span className="absolute -top-0.5 -right-0.5 text-[7px] font-bold bg-gradient-to-r from-primary to-secondary text-white px-1 py-0.5 rounded-full leading-none z-10">
                   AI
+                </span>
+              )}
+              {tab.notif && unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] rounded-full bg-red-500 text-white text-[8px] font-bold flex items-center justify-center px-0.5 leading-none z-10">
+                  {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
               <Icon

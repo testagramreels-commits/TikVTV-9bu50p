@@ -15,10 +15,12 @@ import Header from '@/components/layout/Header';
 import LoadingCard from '@/components/features/LoadingCard';
 import AuthModal from '@/components/features/AuthModal';
 import HighlightsReel from '@/components/features/HighlightsReel';
+import AdBanner from '@/components/features/AdBanner';
 import { useT } from '@/lib/i18n';
 
 const PRELOAD_RADIUS   = 2;   // preload ±2 cards
 const HIGHLIGHTS_EVERY = 8;
+const AD_EVERY         = 12;  // show ad every 12 channels
 
 export default function Feed() {
   const [searchParams]                = useSearchParams();
@@ -232,6 +234,10 @@ export default function Feed() {
               <div style={{ scrollSnapAlign: 'none' }}>
                 <HighlightsReel />
               </div>
+            )}
+            {/* Ad banner every AD_EVERY channels */}
+            {(index + 1) % AD_EVERY === 0 && index < liveChannels.length - 1 && (
+              <AdBanner index={index * 1000} />
             )}
           </div>
         ))}
