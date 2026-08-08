@@ -32,6 +32,7 @@ import SocialProfile from './pages/SocialProfile';
 import PaymentCallback from './pages/PaymentCallback';
 import Subscription from './pages/Subscription';
 import NotificationCenter from './pages/NotificationCenter';
+import Referral from './pages/Referral';
 import NotFound from './pages/NotFound';
 
 const queryClient = new QueryClient({
@@ -126,6 +127,7 @@ const App = () => (
             <Route path="/premium/callback" element={<PaymentCallback />} />
             <Route path="/subscription" element={<Subscription />} />
             <Route path="/notifications" element={<NotificationCenter />} />
+            <Route path="/referral" element={<Referral />} />
             <Route path="/channel/:id" element={<ChannelDetail />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

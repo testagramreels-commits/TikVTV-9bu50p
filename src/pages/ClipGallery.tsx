@@ -4,6 +4,7 @@
  */
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import VastPreRoll from '@/components/features/VastPreRoll';
 import {
   ArrowLeft, Play, Pause, Clock, Trash2, Loader2, Film, Download,
   Volume2, VolumeX, Share2, Users, ExternalLink, Crown,
@@ -46,21 +47,28 @@ function ClipViewer({ clips, startIndex, onClose }: {
 }) {
   const { user } = useAuthStore();
   const [index,    setIndex]    = useState(startIndex);
-  const [playing,  setPlaying]  = useState(true);
+  const [playing,  setPlaying]  = useState(false); // start paused until ad finishes
   const [muted,    setMuted]    = useState(false);
   const [progress, setProgress] = useState(0);
   const [deleting, setDeleting] = useState(false);
+  const [showAd,   setShowAd]   = useState(true);  // VAST pre-roll per clip
   const videoRef = useRef<HTMLVideoElement>(null);
   const clip = clips[index];
+
+  // Reset ad + playback on clip change
+  useEffect(() => {
+    setShowAd(true);
+    setPlaying(false);
+  }, [index]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     video.currentTime = 0;
     video.muted = muted;
-    if (playing) video.play().catch(() => {});
+    if (playing && !showAd) video.play().catch(() => {});
     else video.pause();
-  }, [index, playing, muted]);
+  }, [index, playing, muted, showAd]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -80,6 +88,11 @@ function ClipViewer({ clips, startIndex, onClose }: {
       video.removeEventListener('ended', onEnd);
     };
   }, [index, clips.length]);
+
+  const handleAdComplete = () => {
+    setShowAd(false);
+    setPlaying(true);
+  };
 
   const shareToSocial = async () => {
     if (!user) { toast.error('Sign in to share'); return; }
@@ -118,6 +131,9 @@ function ClipViewer({ clips, startIndex, onClose }: {
 
   return (
     <div className="fixed inset-0 z-50 bg-black flex flex-col">
+      {/* VAST pre-roll — shown before each clip */}
+      {showAd && <VastPreRoll onComplete={handleAdComplete} showMessage />}
+
       {/* Progress bars row */}
       <div className="absolute top-0 left-0 right-0 z-20 flex gap-1 p-3 pt-safe-top pt-12">
         {clips.map((_, i) => (
@@ -153,7 +169,7 @@ function ClipViewer({ clips, startIndex, onClose }: {
       {/* Video */}
       <div
         className="flex-1 relative"
-        onClick={() => setPlaying(p => !p)}
+        onClick={() => !showAd && setPlaying(p => !p)}
       >
         <video
           ref={videoRef}

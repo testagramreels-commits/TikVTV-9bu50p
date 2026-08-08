@@ -6,7 +6,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Crown, Infinity, Sparkles, CheckCircle2, Clock,
-  Calendar, RefreshCw, Loader2, ExternalLink, Shield, Zap, AlertCircle,
+  Calendar, RefreshCw, Loader2, ExternalLink, Shield, Zap, AlertCircle, ChevronRight,
 } from 'lucide-react';
 import { usePremium } from '@/hooks/usePremium';
 import { useAuthStore } from '@/stores/authStore';
@@ -305,6 +305,21 @@ export default function Subscription() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Referral link */}
+        <div className="bg-primary/5 border border-primary/15 rounded-2xl p-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/15 flex items-center justify-center flex-none">
+            <span className="text-xl">🎁</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white text-sm font-semibold">Refer a Friend</p>
+            <p className="text-white/40 text-xs">Both of you get 1 free month when they subscribe</p>
+          </div>
+          <button onClick={() => navigate('/referral')}
+            className="flex items-center gap-1 text-primary text-xs font-bold hover:underline flex-none">
+            Invite <ChevronRight className="w-3 h-3" />
+          </button>
         </div>
 
         <p className="text-center text-white/15 text-[10px] pb-4">

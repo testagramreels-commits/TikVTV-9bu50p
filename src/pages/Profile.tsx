@@ -292,6 +292,10 @@ export default function Profile() {
             className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
             <span className="text-white/40 text-base">🔔</span>Notification Centre
           </button>
+          <button onClick={() => navigate('/referral')}
+            className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
+            <span className="text-white/40 text-base">🎁</span>Referral Program — Earn Free Months
+          </button>
           <button onClick={() => navigate('/health')}
             className="w-full flex items-center gap-3 px-4 py-3 bg-white/5 border border-white/8 rounded-xl text-white/70 text-sm hover:bg-white/10 transition-colors">
             <span className="text-white/40 text-base">📡</span>Stream health monitor

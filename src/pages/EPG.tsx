@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Calendar, Clock, RefreshCw, Loader2, Tv2, Search, Bell, BellOff, ChevronLeft, ChevronRight, Info, Play } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { fetchAllChannels } from '@/lib/iptvApi';
 import type { IPTVChannel } from '@/types';
@@ -121,10 +122,41 @@ export default function EPG() {
       headerRef.current.scrollLeft = scrollRef.current.scrollLeft;
   };
 
-  const toggleReminder = (key: string) => {
+  const toggleReminder = (key: string, prog?: EpgProgram) => {
     setReminders(s => {
       const next = new Set(s);
-      if (next.has(key)) { next.delete(key); } else { next.add(key); }
+      if (next.has(key)) {
+        next.delete(key);
+        toast('Reminder removed');
+      } else {
+        next.add(key);
+        // Schedule browser notification if API is available
+        if (prog && 'Notification' in window) {
+          const startMs  = new Date(prog.start).getTime();
+          const delayMs  = startMs - Date.now() - 60_000; // 1 min before
+          if (delayMs > 0) {
+            Notification.requestPermission().then(perm => {
+              if (perm === 'granted') {
+                setTimeout(() => {
+                  new Notification(`🔔 Starting soon: ${prog.title}`, {
+                    body:  `${fmt(prog.start)} · ${prog.description || prog.category || 'Live TV'}`,
+                    icon:  '/manifest.json',
+                    badge: '/manifest.json',
+                    tag:   key,
+                  });
+                }, Math.min(delayMs, 2_147_483_647)); // max setTimeout
+                toast.success(`Reminder set! You'll be notified 1 min before ${prog.title} starts.`);
+              } else {
+                toast.success('Reminder saved (enable browser notifications for alerts).');
+              }
+            });
+          } else {
+            toast('Programme has already started or is too soon for a reminder.');
+          }
+        } else {
+          toast.success('Reminder set!');
+        }
+      }
       return next;
     });
   };
@@ -300,7 +332,7 @@ export default function EPG() {
                             onClick={() => setSelected(prog)}
                             className={cn(
                               'absolute top-1 bottom-1 rounded-xl px-2.5 flex flex-col justify-center overflow-hidden border transition-all hover:z-20 hover:scale-y-105',
-                              prog.isNow ? 'bg-primary/25 border-primary/50' : 'bg-white/5 border-white/8 hover:bg-white/12'
+                              prog.isNow ? 'bg-primary/25 border-primary/50' : reminders.has(rKey) ? 'bg-amber-500/10 border-amber-500/30' : 'bg-white/5 border-white/8 hover:bg-white/12'
                             )}
                             style={{ left: left + 2, width: width - 4 }}>
                             {prog.isNow && (
@@ -311,7 +343,7 @@ export default function EPG() {
                             )}
                             <p className={cn('text-[10px] font-semibold truncate', prog.isNow ? 'text-white' : 'text-white/70')}>{prog.title}</p>
                             <p className="text-white/25 text-[9px] truncate">{fmt(prog.start)}–{fmt(prog.stop)}</p>
-                            {reminders.has(rKey) && <Bell className="w-2.5 h-2.5 text-primary/60 absolute top-1 right-1" />}
+                            {reminders.has(rKey) && <Bell className="w-2.5 h-2.5 text-amber-400 absolute top-1 right-1" />}
                           </button>
                         );
                       })}
@@ -343,7 +375,7 @@ export default function EPG() {
               <span className="inline-block bg-primary/15 text-primary text-xs font-semibold px-3 py-1 rounded-full capitalize">{selected.category}</span>
             )}
             <button
-              onClick={() => { toggleReminder(`-${selected.start}`); toast.success(reminders.has(`-${selected.start}`) ? 'Reminder removed' : 'Reminder set!'); setSelected(null); }}
+              onClick={() => { toggleReminder(`-${selected.start}`, selected); setSelected(null); }}
               className="w-full flex items-center justify-center gap-2 bg-primary/15 border border-primary/30 text-primary font-semibold py-3 rounded-2xl hover:bg-primary/25 transition-colors">
               <Bell className="w-4 h-4" /> Set Reminder
             </button>

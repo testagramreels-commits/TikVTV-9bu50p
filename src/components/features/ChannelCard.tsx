@@ -12,6 +12,7 @@ import { useComments } from '@/hooks/useComments';
 import { useAutoClipRecorder } from '@/hooks/useAutoClipRecorder';
 import { useChannelLock } from '@/hooks/useChannelLock';
 import { markChannelDead } from '@/lib/iptvApi';
+import VastPreRoll from './VastPreRoll';
 
 interface Props {
   channel:        IPTVChannel;
@@ -32,6 +33,10 @@ export default function ChannelCard({
   const [dead,         setDead]         = useState(false);
   const [videoEl,      setVideoEl]      = useState<HTMLVideoElement | null>(null);
   const [isReady,      setIsReady]      = useState(false);
+  // VAST pre-roll: show ad once per session per channel when user first activates it
+  const [showVast,     setShowVast]     = useState(false);
+  const [vastShown,    setVastShown]    = useState(false);
+  const adShownRef = useRef(false);
   const { count, fetchCount }           = useComments(channel.id);
   const navigate                        = useNavigate();
   const playerRef                       = useRef<VideoPlayerHandle>(null);
@@ -67,7 +72,13 @@ export default function ChannelCard({
       sharedOnReady.current = true;
       onChannelReady(channel.id);
     }
-  }, [channel.id, onChannelReady]);
+    // Show VAST pre-roll once per channel per session when user activates it
+    if (isActive && !adShownRef.current && !vastShown) {
+      adShownRef.current = true;
+      setVastShown(true);
+      setShowVast(true);
+    }
+  }, [channel.id, onChannelReady, isActive, vastShown]);
 
   // Pause video when locked
   useEffect(() => {
@@ -95,6 +106,14 @@ export default function ChannelCard({
         onError={handleError}
         onReady={handleReady}
       />
+
+      {/* VAST pre-roll ad — shown once per session on first activation */}
+      {showVast && (
+        <VastPreRoll
+          onComplete={() => setShowVast(false)}
+          showMessage
+        />
+      )}
 
       {/* Lock overlay — shown after 10 min */}
       {locked && (
