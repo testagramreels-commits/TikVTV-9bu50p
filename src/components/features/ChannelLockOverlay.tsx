@@ -1,6 +1,6 @@
 /**
  * Paywall overlay shown when a channel has been watched for 15+ minutes.
- * Opens PesaPal premium purchase modal.
+ * Shows KES pricing (not USD). Opens PesaPal premium purchase modal.
  */
 import { useState } from 'react';
 import { Lock, Star, Zap, ArrowRight, Crown } from 'lucide-react';
@@ -74,8 +74,9 @@ export default function ChannelLockOverlay({ channel, onUnlock }: Props) {
             <ArrowRight className="w-4 h-4" />
           </button>
 
+          {/* ✅ Fixed: KES pricing, not USD */}
           <p className="text-white/25 text-xs">
-            From $9.99/mo · Secured by <span className="text-amber-400/60">PesaPal</span>
+            From <span className="text-amber-400 font-semibold">KES 100/mo</span> · Secured by <span className="text-amber-400/60">PesaPal</span>
           </p>
         </div>
       </div>

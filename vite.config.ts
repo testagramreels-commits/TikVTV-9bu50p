@@ -7,6 +7,12 @@ export default defineConfig({
   server: {
     host: "::",
     port: 8080,
+    // Deep-link / SPA fallback: all 404s return index.html so React Router handles them
+    historyApiFallback: true,
+  },
+  preview: {
+    // Also enable for `vite preview`
+    historyApiFallback: true,
   },
   plugins: [
     react(),

@@ -1,8 +1,9 @@
 /* ============================================================
    TikTV Service Worker — Cache-First for assets, Network-First for API
+   SPA deep-link support: navigation requests always return index.html
    ============================================================ */
 
-const CACHE_NAME   = 'tikvtv-v3';
+const CACHE_NAME   = 'tikvtv-v4';
 const API_PREFIXES = [
   'iptv-org.github.io/api',
   'iptv-org.github.io/iptv',
@@ -10,7 +11,6 @@ const API_PREFIXES = [
   'ui-avatars.com',
 ];
 
-// App shell — cached on install
 const APP_SHELL = [
   '/',
   '/index.html',
@@ -38,7 +38,7 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = request.url;
 
-  // Skip non-GET, chrome-extension, and HLS streams (don't cache video)
+  // Skip non-GET, chrome-extension, and HLS streams
   if (request.method !== 'GET') return;
   if (url.startsWith('chrome-extension://')) return;
   if (url.includes('.m3u8') || url.includes('.ts') || url.includes('.aac')) return;
@@ -61,7 +61,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell: Cache-First
+  // ── SPA Navigation fallback ──
+  // For page navigations (HTML requests), always return the app shell
+  // so deep links like /channel/abc don't 404 on refresh.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      caches.match('/index.html').then(cached => {
+        if (cached) return cached;
+        return fetch('/index.html');
+      })
+    );
+    return;
+  }
+
+  // Static assets: Cache-First
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) return cached;
@@ -72,18 +85,48 @@ self.addEventListener('fetch', (event) => {
         }
         return res;
       }).catch(() => {
-        // Offline fallback for navigation
         if (request.mode === 'navigate') {
-          return caches.match('/') || caches.match('/index.html');
+          return caches.match('/index.html') || caches.match('/');
         }
       });
     })
   );
 });
 
-// Background sync for channel updates
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+});
+
+// ── Web Push notification display ────────────────────────────────────────
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  let data = {};
+  try { data = event.data.json(); } catch { data = { title: 'TikVTV', body: event.data.text() }; }
+
+  const { title = 'TikVTV', body = '', icon = '/manifest.json', url = '/' } = data;
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon,
+      badge:  '/manifest.json',
+      data:   { url },
+      vibrate: [200, 100, 200],
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+      for (const client of list) {
+        if (client.url === url && 'focus' in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
 });
